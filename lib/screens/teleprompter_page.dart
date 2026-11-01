@@ -184,19 +184,21 @@ class _TeleprompterPageState extends State<TeleprompterPage>
 
   /// A tela de leitura ocupa o display do aplicativo. A ocultação das barras
   /// do sistema é best-effort: Android com target API 36+ exige edge-to-edge.
-  void _enterFullScreen() {
+  void _enterFullScreen({bool showControls = false}) {
+    if (!mounted) return;
     FocusManager.instance.primaryFocus?.unfocus();
     _fullScreenControlsTimer?.cancel();
-    if (mounted) {
-      setState(() {
-        _editing = false;
-        _fullScreen = true;
-        _fullScreenControlsVisible = false;
-      });
-    }
+    setState(() {
+      _editing = false;
+      _fullScreen = true;
+      // No modo de prévia, mantenha os controles visíveis para iniciar a leitura.
+      // Durante a leitura, o roteiro ocupa toda a área sem controles sobrepostos.
+      _fullScreenControlsVisible = showControls;
+    });
     _syncScreenAwake();
     unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky)
         .catchError((Object _) {}));
+    if (showControls && _playing) _autoHideFullScreenControls();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted && _fullScreen) _scrollToFocus();
     });
@@ -1044,7 +1046,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                   child: FilledButton.icon(
                     onPressed: _playPending ? null : _togglePlayback,
                     icon: Icon(_playing ? Icons.pause : Icons.play_arrow),
-                    label: Text(_playing ? 'Pausar' : 'Continuar'),
+                    label: Text(_playing ? 'Pausar' :
+                        _scrollMode == ScrollMode.voice ? 'Iniciar por voz' : 'Iniciar'),
                   ),
                 ),
                 IconButton(
@@ -1144,6 +1147,12 @@ class _TeleprompterPageState extends State<TeleprompterPage>
               if (_remoteConnected)
                 const Padding(padding: EdgeInsets.symmetric(horizontal: 4),
                     child: Icon(Icons.cast_connected, color: Colors.greenAccent)),
+              if (!_editing)
+                IconButton(
+                  tooltip: 'Abrir tela cheia',
+                  icon: const Icon(Icons.fullscreen),
+                  onPressed: () => _enterFullScreen(showControls: true),
+                ),
               PopupMenuButton<String>(
                 tooltip: 'Controle remoto',
                 icon: const Icon(Icons.settings_remote),
@@ -1221,9 +1230,9 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                     Padding(
                       padding: const EdgeInsets.all(14),
                       child: FilledButton.icon(
-                        onPressed: () => setState(() => _editing = false),
-                        icon: const Icon(Icons.play_circle_outline),
-                        label: const Text('Abrir teleprompter'),
+                        onPressed: () => _enterFullScreen(showControls: true),
+                        icon: const Icon(Icons.fullscreen),
+                        label: const Text('Abrir em tela cheia'),
                       ),
                     )
                   else

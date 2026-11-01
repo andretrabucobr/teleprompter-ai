@@ -65,13 +65,23 @@ jobs:
                   raise SystemExit(f'Pacote Kotlin não encontrado: {path}')
               source = path.read_text(encoding='utf-8')
               occurrences = source.count(original)
-              if occurrences != 2:
-                  raise SystemExit(f'Esperadas 2 chamadas antigas em {filename}, encontradas {occurrences}. Interrompido para não alterar código desconhecido.')
-              # Primeiro item: vídeo. Segundo item: áudio.
-              source = source.replace(original, 'EditedMediaItemSequence.withVideoFrom(', 1)
-              source = source.replace(original, 'EditedMediaItemSequence.withAudioFrom(', 1)
-              path.write_text(source, encoding='utf-8')
-              print(f'{filename}: duas chamadas migradas para a API Media3 1.9+')
+              migrated_video = source.count('EditedMediaItemSequence.withVideoFrom(')
+              migrated_audio = source.count('EditedMediaItemSequence.withAudioFrom(')
+
+              if occurrences == 2 and migrated_video == 0 and migrated_audio == 0:
+                  # Primeiro item: vídeo. Segundo item: áudio.
+                  source = source.replace(original, 'EditedMediaItemSequence.withVideoFrom(', 1)
+                  source = source.replace(original, 'EditedMediaItemSequence.withAudioFrom(', 1)
+                  path.write_text(source, encoding='utf-8')
+                  print(f'{filename}: duas chamadas migradas para a API Media3 1.9+')
+              elif occurrences == 0 and migrated_video == 1 and migrated_audio == 1:
+                  print(f'{filename}: já corrigido; nenhuma alteração necessária')
+              else:
+                  raise SystemExit(
+                      f'Estado inesperado em {filename}: antigas={occurrences}, '
+                      f'video={migrated_video}, audio={migrated_audio}. '
+                      'A correção foi interrompida para evitar alterações indevidas.'
+                  )
           PYTHON
       - name: Compilar APK de teste
         run: flutter build apk --debug

@@ -1,26 +1,20 @@
-TELEPROMPTER AI v0.8.1 — DESTAQUE ÚNICO + COR #D1D93F
+TELEPROMPTER AI v0.8.3 — PAUSA AUTOMÁTICA NO SILÊNCIO
 
-Atualização sobre a v0.8 com a correção Dart anterior já aplicada.
+Atualize APENAS estes 3 arquivos no repositório GitHub, preservando os caminhos:
+  lib/screens/teleprompter_page.dart
+  lib/core/predictive_reading_cursor.dart
+  test/predictive_reading_cursor_test.dart
 
-Envie os arquivos e pastas deste ZIP para a RAIZ do repositório GitHub:
-  lib/main.dart                                (substituir)
-  lib/screens/teleprompter_page.dart           (substituir)
-  lib/core/app_colors.dart                     (novo)
-  lib/core/last_spoken_word.dart               (novo)
-  test/last_spoken_word_test.dart              (novo)
-  pubspec.yaml                                 (substituir, versão 0.8.1+9)
+Sem alterações em .github/workflows/build-mobile.yml, no tema #D1D93F ou no modelo de reconhecimento.
 
-Não altere a pasta .github nem o workflow que está compilando.
-Execute novamente o GitHub Actions na opção streaming.
+MODO VOZ: pausa automaticamente a rolagem após o detector PCM identificar silêncio (aprox. 0,4 s), incluindo interrupção da animação em andamento. Ao falar de novo, a rolagem prossegue da posição atual. Confirmações atrasadas do ASR não deslocam o texto durante a pausa.
 
-Mudanças:
-- Botões, chips e controles usam a cor de marca #D1D93F.
-- Somente a última palavra confirmada pelo ASR recebe fundo #D1D93F.
-- Palavras futuras e anteriores não recebem cor diferente.
-- A antecipação continua movimentando o texto sem pintar as palavras futuras.
-- A faixa de referência na leitura também usa a cor de marca.
+MODO VELOCIDADE: continua rolando na velocidade escolhida; não depende da voz.
 
-Observação: o reconhecimento de voz ainda pode entregar confirmações com atraso;
-esta atualização altera o destaque e a cor, não reduz a latência do ASR.
+FALLBACK NATIVO: sem PCM, o aplicativo usa hipóteses parciais como aproximação; pode ter comportamento menos preciso.
 
-Validação: testes Dart adicionados; execução no Flutter/GitHub Actions pendente.
+Testes incluídos (não executados neste ambiente):
+  flutter analyze --no-fatal-infos --no-fatal-warnings
+  flutter test
+
+Compile no GitHub Actions com a opção de streaming já usada anteriormente.

@@ -55,8 +55,18 @@ class PredictiveReadingCursor {
   /// Quando o silêncio começa, o progresso para; não há rolagem por tempo
   /// decorrido durante a pausa.
   void onSpeechActivity(bool speaking, int nowMillis) {
-    tick(nowMillis);
-    _speechActive = speaking;
+    // A transição para silêncio não integra tempo adicional: congela
+    // imediatamente a posição. Breves intervalos entre sílabas já são
+    // filtrados pelo detector PCM antes de chegar até aqui.
+    if (!speaking) {
+      _speechActive = false;
+      _lastTickMillis = nowMillis;
+      return;
+    }
+    if (!_speechActive) {
+      _speechActive = true;
+      _lastTickMillis = nowMillis; // retoma sem somar o período em silêncio
+    }
   }
 
   /// Confirmação atrasada do reconhecedor. Nunca faz o foco voltar.
@@ -77,7 +87,12 @@ class PredictiveReadingCursor {
     _lastConfirmationMillis = nowMillis;
     _lastConfirmationIndex = index;
     _confirmedIndex = index;
-    _estimatedPosition = math.max(_estimatedPosition, (index + 1).toDouble());
+    // O ASR pode confirmar palavras vários instantes após a pessoa parar.
+    // Registra a confirmação para o próximo trecho, mas não movimenta a
+    // área de leitura enquanto o microfone indicar silêncio.
+    if (_speechActive) {
+      _estimatedPosition = math.max(_estimatedPosition, (index + 1).toDouble());
+    }
   }
 
   /// Retorna o foco atual. Passos grandes do relógio não geram saltos.

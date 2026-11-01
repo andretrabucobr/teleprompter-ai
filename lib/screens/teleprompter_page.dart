@@ -65,6 +65,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   CameraController? _camera;
   List<CameraDescription> _cameras = [];
   Timer? _ticker;
+  Timer? _nativeVoiceIdleTimer;
   Timer? _saveTimer;
   Timer? _fullScreenControlsTimer;
   Future<void> _wakeLockSequence = Future<void>.value();
@@ -93,6 +94,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   int _focusIndex = 0; // primeira palavra da faixa a LER (previsão)
   int _anticipationWords = 5;
   bool _voiceIsSpeaking = false;
+  bool _pendingVoiceActivity = false;
+  bool _nativeSpeechFallback = false;
   String _voiceStatus = 'Inativo';
   String _lastRecognizedText = '';
   String? _cameraError;
@@ -200,7 +203,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
         .catchError((Object _) {}));
     if (showControls && _playing) _autoHideFullScreenControls();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && _fullScreen) _scrollToFocus();
+      if (mounted && _fullScreen) _scrollToFocus(force: true);
     });
   }
 
@@ -216,7 +219,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge)
         .catchError((Object _) {}));
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _scrollToFocus();
+      if (mounted) _scrollToFocus(force: true);
     });
   }
 
@@ -278,8 +281,24 @@ class _TeleprompterPageState extends State<TeleprompterPage>
 
   void _onTranscript(String transcript, bool isFinal) {
     if (!_playing || _scrollMode != ScrollMode.voice || !mounted) return;
-    final position = _tracker.accept(transcript, isFinal: isFinal);
     final trimmed = transcript.trim();
+    // Apenas o fallback nativo não fornece áudio PCM/VAD. Nesse caso,
+    // hipóteses parciais são um sinal aproximado de atividade de voz.
+    // Um resultado final tardio NÃO reativa a rolagem depois do silêncio.
+    if (_nativeSpeechFallback) {
+      if (!isFinal && trimmed.isNotEmpty) {
+        _onSpeechActivity(true);
+        _nativeVoiceIdleTimer?.cancel();
+        _nativeVoiceIdleTimer = Timer(
+          const Duration(milliseconds: 600),
+          () => _onSpeechActivity(false),
+        );
+      } else if (isFinal) {
+        _nativeVoiceIdleTimer?.cancel();
+        _onSpeechActivity(false);
+      }
+    }
+    final position = _tracker.accept(transcript, isFinal: isFinal);
     if (position != null && position > _activeIndex) {
       _readingCursor.onConfirmed(
         position, DateTime.now().millisecondsSinceEpoch);
@@ -301,11 +320,28 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   }
 
   void _onSpeechActivity(bool active) {
-    if (!mounted || !_playing || _scrollMode != ScrollMode.voice) return;
+    if (!mounted || _scrollMode != ScrollMode.voice) return;
+    // O microfone pode começar antes de _play() terminar a inicialização.
+    // Preserva o último estado para que a primeira fala não seja perdida.
+    if (!_playing) {
+      if (_playPending) _pendingVoiceActivity = active;
+      return;
+    }
     _readingCursor.onSpeechActivity(
         active, DateTime.now().millisecondsSinceEpoch);
+    if (!active) {
+      // Interrompe até uma animação de 180 ms que ainda esteja em andamento.
+      // Resultados atrasados do ASR apenas mudam o destaque da palavra lida.
+      _freezeAutomaticScroll();
+    }
     if (_voiceIsSpeaking != active) {
       setState(() => _voiceIsSpeaking = active);
+    }
+  }
+
+  void _freezeAutomaticScroll() {
+    if (_scroll.hasClients) {
+      _scroll.jumpTo(_scroll.offset); // cancela animateTo pendente
     }
   }
 
@@ -316,7 +352,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     setState(() => _anticipationWords = next);
     // A antecipação agora ajusta apenas o enquadramento do texto,
     // nunca o conjunto de palavras destacadas.
-    _scrollToFocus();
+    _scrollToFocus(force: true);
     _broadcast();
   }
 
@@ -327,13 +363,18 @@ class _TeleprompterPageState extends State<TeleprompterPage>
         fontWeight: FontWeight.w600,
       );
 
-  void _scrollToFocus() {
+  void _scrollToFocus({bool force = false}) {
+    // A previsão não pode rolar durante o silêncio. O parâmetro force
+    // fica reservado a ações explícitas: busca, tela cheia, ajuste de fonte.
+    if (!force && _scrollMode == ScrollMode.voice && !_voiceIsSpeaking) return;
     final targetIndex = _scrollMode == ScrollMode.voice
         // A previsão mantém a leitura adiante, mas NÃO pinta as palavras futuras.
         ? _readingCursor.focusEndIndex : _activeIndex;
     if (targetIndex < 0 || targetIndex >= _matcher.words.length) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scroll.hasClients) return;
+      // Evita que callbacks já agendados reativem uma animação após pausa.
+      if (!force && _scrollMode == ScrollMode.voice && !_voiceIsSpeaking) return;
       final word = _matcher.words[targetIndex];
       final painter = TextPainter(
         text: TextSpan(text: _script.text, style: _readingStyle()),
@@ -389,6 +430,9 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     // Entrar na tela cheia ANTES de carregar o Whisper (pode ser demorado).
     _enterFullScreen();
     _playPending = true;
+    _pendingVoiceActivity = false;
+    _nativeSpeechFallback = false;
+    _nativeVoiceIdleTimer?.cancel();
     if (mounted) setState(() {});
     final generation = ++_playGeneration;
     try {
@@ -413,6 +457,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
             if (!ready) {
               throw StateError('ASR offline e nativo indisponíveis: $offlineError');
             }
+            _nativeSpeechFallback = true;
           }
         }
         if (generation != _playGeneration) {
@@ -426,6 +471,9 @@ class _TeleprompterPageState extends State<TeleprompterPage>
           _editing = false;
           _playing = true;
           if (_scrollMode == ScrollMode.voice) {
+            _readingCursor.onSpeechActivity(
+              _pendingVoiceActivity, DateTime.now().millisecondsSinceEpoch);
+            _voiceIsSpeaking = _pendingVoiceActivity;
             _focusIndex = _readingCursor.focusIndex;
           }
         });
@@ -455,6 +503,10 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     if (_recordingBusy && !_recording) return;
     ++_playGeneration;
     _ticker?.cancel();
+    _nativeVoiceIdleTimer?.cancel();
+    _nativeSpeechFallback = false;
+    _pendingVoiceActivity = false;
+    _freezeAutomaticScroll();
     _readingCursor.onSpeechActivity(false,
         DateTime.now().millisecondsSinceEpoch);
     _voiceIsSpeaking = false;
@@ -510,7 +562,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       _activeIndex = confirmed;
       _focusIndex = _readingCursor.focusIndex;
     });
-    _scrollToFocus();
+    _scrollToFocus(force: true);
     _broadcast();
   }
 
@@ -712,7 +764,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       case 'set_font_size':
         if (value is! num) throw StateError('Fonte inválida.');
         setState(() => _fontSize = value.toDouble().clamp(20, 72).toDouble());
-        _scrollToFocus();
+        _scrollToFocus(force: true);
       case 'set_mirror':
         if (value is! bool) throw StateError('Espelhamento inválido.');
         setState(() => _mirror = value);
@@ -887,6 +939,11 @@ class _TeleprompterPageState extends State<TeleprompterPage>
             ),
           ]),
           if (_scrollMode == ScrollMode.voice) ...[
+            if (_playing)
+              Text(_voiceIsSpeaking
+                  ? 'Acompanhando sua fala'
+                  : 'Rolagem parada — aguardando sua voz',
+                  style: Theme.of(context).textTheme.labelSmall),
             Text(_mode == PrompterMode.camera
                     ? 'Voz streaming pt-BR (fallback Whisper): $_voiceStatus'
                     : 'Voz streaming pt-BR (fallback Whisper/nativo): $_voiceStatus',
@@ -1121,6 +1178,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     _recordingBusy = false;
     _syncScreenAwake();
     _ticker?.cancel();
+    _nativeVoiceIdleTimer?.cancel();
     _saveTimer?.cancel();
     _fullScreenControlsTimer?.cancel();
     unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge)

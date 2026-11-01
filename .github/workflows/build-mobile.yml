@@ -9,7 +9,7 @@ on:
         required: true
         default: 'base'
         type: choice
-        options: [base, tiny]
+        options: [base, tiny, small]
 
 jobs:
   android:

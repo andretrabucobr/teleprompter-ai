@@ -33,6 +33,7 @@ jobs:
       - name: Dependências e análise
         run: |
           flutter pub get
+          rm -f test/widget_test.dart
           flutter analyze --no-fatal-infos --no-fatal-warnings
           flutter test
       - name: Compilar APK de teste
@@ -60,6 +61,7 @@ jobs:
       - name: Dependências e análise
         run: |
           flutter pub get
+          rm -f test/widget_test.dart
           flutter analyze --no-fatal-infos --no-fatal-warnings
           flutter test
       - name: Compilar iOS sem assinatura

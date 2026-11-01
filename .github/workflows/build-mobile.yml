@@ -1,0 +1,73 @@
+name: Compilar Teleprompter AI (Android e iOS)
+
+# Execute manualmente para controlar uso de minutos e downloads grandes.
+on:
+  workflow_dispatch:
+    inputs:
+      modelo:
+        description: 'Modelo Whisper (base=mais preciso, tiny=mais rápido)'
+        required: true
+        default: 'base'
+        type: choice
+        options: [base, tiny]
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Gerar arquivos Android/iOS
+        run: flutter create --platforms=android --project-name=teleprompter_ai .
+      - name: Configurar permissões
+        run: python3 scripts/configurar_plataformas.py --platform android
+      - name: Instalar reconhecimento offline
+        run: python3 scripts/instalar_modelo.py --model '${{ inputs.modelo }}'
+      - name: Dependências e análise
+        run: |
+          flutter pub get
+          flutter analyze --no-fatal-infos --no-fatal-warnings
+          flutter test
+      - name: Compilar APK de teste
+        run: flutter build apk --debug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: teleprompter-ai-android-debug
+          path: build/app/outputs/flutter-apk/app-debug.apk
+          if-no-files-found: error
+
+  ios:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Gerar arquivos Android/iOS
+        run: flutter create --platforms=ios --project-name=teleprompter_ai .
+      - name: Configurar permissões
+        run: python3 scripts/configurar_plataformas.py --platform ios
+      - name: Instalar reconhecimento offline
+        run: python3 scripts/instalar_modelo.py --model '${{ inputs.modelo }}'
+      - name: Dependências e análise
+        run: |
+          flutter pub get
+          flutter analyze --no-fatal-infos --no-fatal-warnings
+          flutter test
+      - name: Compilar iOS sem assinatura
+        run: flutter build ios --release --no-codesign
+      - name: Arquivar aplicativo iOS não assinado
+        run: cd build/ios/iphoneos && zip -qry ../../../teleprompter-ai-ios-sem-assinatura.zip Runner.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: teleprompter-ai-ios-unsigned
+          path: teleprompter-ai-ios-sem-assinatura.zip
+          if-no-files-found: error

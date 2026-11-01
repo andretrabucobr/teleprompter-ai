@@ -1,4 +1,4 @@
-# Teleprompter AI — MVP v0.6 (Android e iPhone)
+# Teleprompter AI — MVP v0.8 (Android e iPhone)
 
 **Estado:** código-fonte experimental; **NÃO é um APK/IPA instalado e validado**.
 Requer Flutter e os SDKs da plataforma para compilar. O modelo Whisper não
@@ -9,6 +9,31 @@ acompanha este ZIP, porque ocupa centenas de MB.
 > No Windows, o arquivo `COMPILAR_ANDROID_WINDOWS.bat` conduz a compilação Android
 > depois da instalação do Flutter SDK, Android SDK, JDK 17 e Python.
 > A configuração nativa agora é **separada por plataforma**, sem exigir iOS no Windows.
+
+## Alterações da v0.8 — reconhecimento por streaming real
+
+- Modelo **Nemotron 3.5 ASR Streaming 0.6B INT8** com português brasileiro,
+  hipótese **parcial**, e contexto incremental em isolate próprio.
+- Entrada de microfone única com vídeo/WAV preservado; quadros PCM de 100 ms,
+  detecção de atividade, buffer limitado e cursor visual antecipado da v0.7.
+- Escolha `streaming` e `android` no GitHub Actions após atualizar o workflow.
+  A CI instala o modelo oficial (arquivo compactado ~475 MB; >650 MB extraído)
+  e Whisper Tiny como alternativa.
+- Os arquivos binários do modelo NÃO acompanham este ZIP; detalhes em
+  [`docs/ATUALIZACAO_V08.md`](docs/ATUALIZACAO_V08.md).
+- O tempo real e a memória durante a gravação exigem testes físicos: não foi
+  possível compilar nesta sessão (Flutter SDK ausente).
+
+## Alterações da v0.7 — leitura antecipada, não atrasada
+
+- A v0.6 destacava a palavra já reconhecida pelo Whisper, com atraso natural.
+  A v0.7 distingue reconhecimento **confirmado** de faixa **a ler em seguida**.
+- O destaque passa a mostrar as **próximas 5 palavras** (ajustável de 2 a 10)
+  e se desloca enquanto existe atividade de voz detectada no PCM, mesmo antes
+  da próxima resposta do Whisper. Durante o silêncio, a previsão congela.
+- A estimativa é limitada a 10 palavras sem confirmação para não avançar
+  indefinidamente em ruído ou quando o ASR falhar.
+- Mais detalhes: [`docs/ATUALIZACAO_V07.md`](docs/ATUALIZACAO_V07.md).
 
 ## Alterações da v0.5 — leitura imersiva e voz
 

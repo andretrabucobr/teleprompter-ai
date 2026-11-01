@@ -1,3 +1,20 @@
+# Teleprompter AI v0.8 — compilar streaming real
+
+**No GitHub**, envie as pastas `lib`, `test`, `scripts`, `docs`, `assets`
+mais `pubspec.yaml` e `README.md` para a raiz do repositório, preservando
+caminhos. A pasta `.github` é oculta no upload web; em vez dela, edite
+`.github/workflows/build-mobile.yml` e cole o conteúdo do arquivo separado
+`WORKFLOW_TELEPROMPTER_V08_STREAMING.txt`.
+
+Vá em Actions → Compilar Teleprompter AI → Run workflow:
+- Modelo: `streaming` (recomendado para teste) ou `base` (Whisper antigo)
+- Plataforma: `android`
+
+O modelo Nemotron é baixado pela CI; o ZIP só contém o código. O APK pode ficar
+muito grande (~650 MB de modelo). iOS ainda exige assinatura e testes físicos.
+
+---
+
 # Compilar o Teleprompter AI (Android e iOS)
 
 **Este ZIP contém código-fonte, não um APK pronto.** O aplicativo ainda não passou

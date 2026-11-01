@@ -10,6 +10,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../core/script_matcher.dart';
+import '../core/predictive_reading_cursor.dart';
 import '../core/screen_awake_policy.dart';
 import '../core/speech_alignment_tracker.dart';
 import '../services/remote_session.dart';
@@ -48,12 +49,16 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   );
   late final SharedAudioCapture _capture = SharedAudioCapture(
     onTranscript: _onTranscript,
+    onSpeechActivity: _onSpeechActivity,
     onStatus: (status) {
       if (mounted) setState(() => _voiceStatus = status);
     },
   );
   ScriptMatcher _matcher = ScriptMatcher(ScriptRepository.sample);
   late SpeechAlignmentTracker _tracker = SpeechAlignmentTracker(_matcher);
+  late PredictiveReadingCursor _readingCursor = PredictiveReadingCursor(
+    wordCount: _matcher.words.length,
+  );
   RemoteHost? _host;
   CameraController? _camera;
   List<CameraDescription> _cameras = [];
@@ -82,7 +87,10 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   double _speed = 40;
   double _viewerWidth = 320;
   double _viewerHeight = 400;
-  int _activeIndex = -1;
+  int _activeIndex = -1; // última palavra CONFIRMADA pelo reconhecimento
+  int _focusIndex = 0; // primeira palavra da faixa a LER (previsão)
+  int _anticipationWords = 5;
+  bool _voiceIsSpeaking = false;
   String _voiceStatus = 'Inativo';
   String _lastRecognizedText = '';
   String? _cameraError;
@@ -107,6 +115,11 @@ class _TeleprompterPageState extends State<TeleprompterPage>
         setState(() {
           _matcher = ScriptMatcher(content);
           _tracker = SpeechAlignmentTracker(_matcher);
+          _readingCursor = PredictiveReadingCursor(
+            wordCount: _matcher.words.length,
+            anticipationWords: _anticipationWords,
+          );
+          _focusIndex = _readingCursor.focusIndex;
           if (savedVideos.isNotEmpty) _latestVideo = savedVideos.first;
         });
       }
@@ -118,6 +131,12 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   void _scriptChanged() {
     _matcher = ScriptMatcher(_script.text);
     _tracker = SpeechAlignmentTracker(_matcher);
+    _readingCursor = PredictiveReadingCursor(
+      wordCount: _matcher.words.length,
+      anticipationWords: _anticipationWords,
+    );
+    _focusIndex = _readingCursor.focusIndex;
+    _voiceIsSpeaking = false;
     _activeIndex = -1;
     _lastRecognizedText = '';
     _saveTimer?.cancel();
@@ -177,7 +196,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky)
         .catchError((Object _) {}));
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && _fullScreen) _scrollToActive();
+      if (mounted && _fullScreen) _scrollToFocus();
     });
   }
 
@@ -193,7 +212,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge)
         .catchError((Object _) {}));
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) _scrollToActive();
+      if (mounted) _scrollToFocus();
     });
   }
 
@@ -247,6 +266,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
         'speed': _speed,
         'fontSize': _fontSize,
         'activeIndex': _activeIndex,
+        'readingIndex': _focusIndex,
+        'anticipationWords': _anticipationWords,
         'recording': _recording,
         'voiceListening': _capture.followingVoice || _speech.running,
       };
@@ -255,13 +276,40 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     if (!_playing || _scrollMode != ScrollMode.voice || !mounted) return;
     final position = _tracker.accept(transcript, isFinal: isFinal);
     final trimmed = transcript.trim();
-    if (trimmed.isNotEmpty) {
-      setState(() => _lastRecognizedText = trimmed.length > 100
-          ? trimmed.substring(trimmed.length - 100) : trimmed);
+    if (position != null && position > _activeIndex) {
+      _readingCursor.onConfirmed(
+        position, DateTime.now().millisecondsSinceEpoch);
     }
-    if (position == null || position == _activeIndex) return;
-    setState(() => _activeIndex = position);
-    _scrollToActive();
+    final focus = _readingCursor.focusIndex;
+    final focusMoved = focus != _focusIndex;
+    if (trimmed.isNotEmpty || position != null || focusMoved) {
+      setState(() {
+        if (trimmed.isNotEmpty) {
+          _lastRecognizedText = trimmed.length > 100
+              ? trimmed.substring(trimmed.length - 100) : trimmed;
+        }
+        if (position != null) _activeIndex = position;
+        _focusIndex = focus;
+      });
+    }
+    if (focusMoved) _scrollToFocus();
+    if (position != null) _broadcast();
+  }
+
+  void _onSpeechActivity(bool active) {
+    if (!mounted || !_playing || _scrollMode != ScrollMode.voice) return;
+    _readingCursor.onSpeechActivity(
+        active, DateTime.now().millisecondsSinceEpoch);
+    if (_voiceIsSpeaking != active) {
+      setState(() => _voiceIsSpeaking = active);
+    }
+  }
+
+  void _setAnticipationWords(int value) {
+    final next = value.clamp(2, 10).toInt();
+    if (next == _anticipationWords) return;
+    _readingCursor.setAnticipationWords(next);
+    setState(() => _anticipationWords = next);
     _broadcast();
   }
 
@@ -272,11 +320,13 @@ class _TeleprompterPageState extends State<TeleprompterPage>
         fontWeight: FontWeight.w600,
       );
 
-  void _scrollToActive() {
-    if (_activeIndex < 0 || _activeIndex >= _matcher.words.length) return;
+  void _scrollToFocus() {
+    final targetIndex = _scrollMode == ScrollMode.voice
+        ? _focusIndex : _activeIndex;
+    if (targetIndex < 0 || targetIndex >= _matcher.words.length) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scroll.hasClients) return;
-      final word = _matcher.words[_activeIndex];
+      final word = _matcher.words[targetIndex];
       final painter = TextPainter(
         text: TextSpan(text: _script.text, style: _readingStyle()),
         textDirection: TextDirection.ltr,
@@ -292,9 +342,12 @@ class _TeleprompterPageState extends State<TeleprompterPage>
         final topPadding = _viewerHeight * .3;
         final destination = (boxes.first.top + topPadding - _viewerHeight * .36)
             .clamp(0.0, _scroll.position.maxScrollExtent).toDouble();
+        // Evita reiniciar animação quando palavras seguintes estão
+        // na mesma linha e a rolagem já está no ponto correto.
+        if ((_scroll.offset - destination).abs() < 1.5) return;
         _scroll.animateTo(
           destination,
-          duration: const Duration(milliseconds: 260),
+          duration: const Duration(milliseconds: 180),
           curve: Curves.easeOutCubic,
         );
       } finally {
@@ -304,7 +357,15 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   }
 
   void _tick(Timer _) {
-    if (!_playing || _scrollMode != ScrollMode.speed || !_scroll.hasClients) return;
+    if (!_playing || !_scroll.hasClients) return;
+    if (_scrollMode == ScrollMode.voice) {
+      final next = _readingCursor.tick(DateTime.now().millisecondsSinceEpoch);
+      if (next >= 0 && next != _focusIndex && mounted) {
+        setState(() => _focusIndex = next);
+        _scrollToFocus();
+      }
+      return;
+    }
     final end = _scroll.position.maxScrollExtent;
     final next = math.min(end, _scroll.offset + _speed / 30);
     _scroll.jumpTo(next);
@@ -351,15 +412,20 @@ class _TeleprompterPageState extends State<TeleprompterPage>
           if (_speech.running) await _speech.stop();
           return;
         }
-      } else {
-        _ticker?.cancel();
-        _ticker = Timer.periodic(const Duration(milliseconds: 33), _tick);
       }
       if (mounted) {
         setState(() {
           _editing = false;
           _playing = true;
+          if (_scrollMode == ScrollMode.voice) {
+            _focusIndex = _readingCursor.focusIndex;
+          }
         });
+        _ticker?.cancel();
+        _ticker = Timer.periodic(
+          Duration(milliseconds: _scrollMode == ScrollMode.voice ? 120 : 33),
+          _tick,
+        );
         if (_fullScreenControlsVisible) _autoHideFullScreenControls();
       }
       _broadcast();
@@ -381,6 +447,9 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     if (_recordingBusy && !_recording) return;
     ++_playGeneration;
     _ticker?.cancel();
+    _readingCursor.onSpeechActivity(false,
+        DateTime.now().millisecondsSinceEpoch);
+    _voiceIsSpeaking = false;
     if (_speech.running) await _speech.stop();
     // Ao pausar a leitura durante um vídeo, o microfone segue gravando.
     if (_recording && _capture.running) {
@@ -403,16 +472,37 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     await _pause();
     if (_scroll.hasClients) _scroll.jumpTo(0);
     _tracker.seek(-1);
-    if (mounted) setState(() => _activeIndex = -1);
+    _readingCursor.seek(-1);
+    if (mounted) {
+      setState(() {
+        _activeIndex = -1;
+        _focusIndex = _readingCursor.focusIndex;
+      });
+    }
     _broadcast();
   }
 
   void _seek(int delta) {
     if (_matcher.words.isEmpty) return;
-    final next = (_activeIndex + delta).clamp(0, _matcher.words.length - 1).toInt();
-    _tracker.seek(next);
-    setState(() => _activeIndex = next);
-    _scrollToActive();
+    // Os botões de avanço/volta partem do texto que a pessoa está vendo,
+    // não da última transcrição que pode ter chegado com atraso.
+    final current = _scrollMode == ScrollMode.voice
+        ? _focusIndex : _activeIndex;
+    final next = (current + delta)
+        .clamp(0, _matcher.words.length - 1).toInt();
+    final confirmed = _scrollMode == ScrollMode.voice ? next - 1 : next;
+    final wasSpeaking = _voiceIsSpeaking && _playing;
+    _tracker.seek(confirmed);
+    _readingCursor.seek(confirmed);
+    if (wasSpeaking) {
+      _readingCursor.onSpeechActivity(
+          true, DateTime.now().millisecondsSinceEpoch);
+    }
+    setState(() {
+      _activeIndex = confirmed;
+      _focusIndex = _readingCursor.focusIndex;
+    });
+    _scrollToFocus();
     _broadcast();
   }
 
@@ -614,7 +704,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       case 'set_font_size':
         if (value is! num) throw StateError('Fonte inválida.');
         setState(() => _fontSize = value.toDouble().clamp(20, 72).toDouble());
-        _scrollToActive();
+        _scrollToFocus();
       case 'set_mirror':
         if (value is! bool) throw StateError('Espelhamento inválido.');
         setState(() => _mirror = value);
@@ -704,11 +794,18 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     for (var i = 0; i < _matcher.words.length; i++) {
       final word = _matcher.words[i];
       if (word.start > cursor) result.add(TextSpan(text: text.substring(cursor, word.start)));
+      // O verde indica PRÓXIMAS palavras a ler (e não a última
+      // transcrição atrasada). O reconhecimento confirmado fica discreto.
+      final ahead = _scrollMode == ScrollMode.voice &&
+          i >= _focusIndex && i <= _readingCursor.focusEndIndex;
       result.add(TextSpan(
         text: text.substring(word.start, word.end),
-        style: i == _activeIndex
-            ? const TextStyle(color: Colors.black, backgroundColor: Color(0xFF4AE4CA))
-            : i < _activeIndex
+        style: ahead
+            ? const TextStyle(
+                color: Colors.black,
+                backgroundColor: Color(0xFF4AE4CA),
+              )
+            : i <= _activeIndex
                 ? const TextStyle(color: Colors.white60)
                 : null,
       ));
@@ -781,8 +878,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
           ]),
           if (_scrollMode == ScrollMode.voice) ...[
             Text(_mode == PrompterMode.camera
-                    ? 'Voz offline (Whisper + filtro de silêncio): $_voiceStatus'
-                    : 'Voz offline, com fallback nativo: $_voiceStatus',
+                    ? 'Voz streaming pt-BR (fallback Whisper): $_voiceStatus'
+                    : 'Voz streaming pt-BR (fallback Whisper/nativo): $_voiceStatus',
                 maxLines: 2, textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodySmall),
             if (_lastRecognizedText.isNotEmpty)
@@ -790,6 +887,19 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                 maxLines: 1, overflow: TextOverflow.ellipsis,
                 style: Theme.of(context).textTheme.labelSmall),
           ],
+          if (_scrollMode == ScrollMode.voice)
+            Row(children: [
+              const Text('Antecipação', style: TextStyle(fontSize: 12)),
+              Expanded(child: Slider(
+                min: 2,
+                max: 10,
+                divisions: 8,
+                value: _anticipationWords.toDouble(),
+                onChanged: (value) => _setAnticipationWords(value.round()),
+              )),
+              Text('$_anticipationWords palavras',
+                  style: const TextStyle(fontSize: 12)),
+            ]),
           Row(children: [
             const Text('A'),
             Expanded(child: Slider(
@@ -874,6 +984,36 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                     ],
                   ),
                 ),
+              ),
+            ),
+          if (_scrollMode == ScrollMode.voice)
+            Positioned(
+              bottom: 92,
+              left: 12,
+              right: 12,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: .85),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Row(children: [
+                  const Padding(
+                    padding: EdgeInsets.only(left: 12),
+                    child: Text('À frente', style: TextStyle(fontSize: 12)),
+                  ),
+                  Expanded(child: Slider(
+                    min: 2,
+                    max: 10,
+                    divisions: 8,
+                    value: _anticipationWords.toDouble(),
+                    onChanged: (value) => _setAnticipationWords(value.round()),
+                  )),
+                  Padding(
+                    padding: const EdgeInsets.only(right: 12),
+                    child: Text('$_anticipationWords palavras',
+                        style: const TextStyle(fontSize: 12)),
+                  ),
+                ]),
               ),
             ),
           Positioned(

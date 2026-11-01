@@ -6,6 +6,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
 import 'wav_pcm_writer.dart';
+import 'asr_worker.dart';
+import 'streaming_asr_worker.dart';
 import 'whisper_asr_worker.dart';
 
 class CapturedAudio {
@@ -24,16 +26,21 @@ class CapturedAudio {
 /// Um único stream PCM vai para WAV e (se solicitado) ASR em outro isolate.
 /// A câmera deve ser criada com enableAudio:false.
 class SharedAudioCapture {
-  SharedAudioCapture({required this.onTranscript, required this.onStatus});
+  SharedAudioCapture({
+    required this.onTranscript,
+    required this.onStatus,
+    this.onSpeechActivity,
+  });
 
   static const int sampleRate = 16000;
   final void Function(String transcript, bool isFinal) onTranscript;
   final void Function(String status) onStatus;
+  final void Function(bool speaking)? onSpeechActivity;
 
   AudioRecorder? _recorder;
   StreamSubscription<Uint8List>? _subscription;
   WavPcmWriter? _writer;
-  WhisperAsrWorker? _recognizer;
+  AsrWorker? _recognizer;
   Future<void>? _starting;
   Future<CapturedAudio?>? _stopping;
   bool _active = false;
@@ -76,13 +83,35 @@ class SharedAudioCapture {
       if (!await recorder.hasPermission()) {
         throw StateError('É necessária a permissão de microfone.');
       }
+      var recognizerName = '';
       if (followVoice) {
-        final worker = WhisperAsrWorker(
-          onText: (text) => onTranscript(text, true),
-          onStatus: onStatus,
-        );
-        _recognizer = worker;
-        await worker.start();
+        // Preferir hipóteses parciais de streaming quando presentes no build.
+        // Se a inicialização não funcionar, usar Whisper sem perder a câmera.
+        if (await StreamingModelFiles.isBundled()) {
+          final online = StreamingAsrWorker(
+            onText: onTranscript,
+            onStatus: onStatus,
+            onSpeechActivity: onSpeechActivity,
+          );
+          try {
+            await online.start();
+            _recognizer = online;
+            recognizerName = 'Streaming pt-BR';
+          } catch (error) {
+            await online.stop();
+            onStatus('Streaming indisponível ($error). Tentando Whisper offline...');
+          }
+        }
+        if (_recognizer == null) {
+          final whisper = WhisperAsrWorker(
+            onText: (text) => onTranscript(text, true),
+            onStatus: onStatus,
+            onSpeechActivity: onSpeechActivity,
+          );
+          await whisper.start();
+          _recognizer = whisper;
+          recognizerName = 'Whisper offline';
+        }
       }
       if (saveAudio) {
         final temp = await getTemporaryDirectory();
@@ -121,7 +150,7 @@ class SharedAudioCapture {
         _streamError ??= error;
         onStatus('Falha no fluxo do microfone: $error');
       });
-      onStatus(followVoice ? 'Microfone único + voz ativa' : 'Microfone único ativo');
+      onStatus(followVoice ? 'Microfone único + $recognizerName ativo' : 'Microfone único ativo');
     } catch (_) {
       await _cleanupFailedStart();
       rethrow;

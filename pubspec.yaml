@@ -1,6 +1,6 @@
 name: teleprompter_ai
-version: 0.6.0+6
-description: Teleprompter com leitura ativa, correspondencia fonetica e controle remoto LAN.
+version: 0.8.0+8
+description: Teleprompter com ASR streaming em pt-BR, gravacao e controle remoto LAN.
 publish_to: none
 
 environment:
@@ -30,3 +30,4 @@ flutter:
   uses-material-design: true
   assets:
     - assets/models/whisper/
+    - assets/models/streaming/

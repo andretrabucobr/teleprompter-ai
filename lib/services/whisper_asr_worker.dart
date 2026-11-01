@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
 import '../core/speech_activity_gate.dart';
+import 'asr_worker.dart';
 
 /// Arquivos Whisper multilíngues INT8 instalados com scripts/instalar_modelo.py.
 /// O tamanho dos arquivos impede incluí-los diretamente neste repositório.
@@ -73,11 +74,16 @@ class WhisperModelFiles {
 
 /// Whisper é OFFLINE, em janelas sobrepostas, e NÃO streaming nativo.
 /// Fluxo PCM de gravação continua independente da inferência.
-class WhisperAsrWorker {
-  WhisperAsrWorker({required this.onText, required this.onStatus});
+class WhisperAsrWorker implements AsrWorker {
+  WhisperAsrWorker({
+    required this.onText,
+    required this.onStatus,
+    this.onSpeechActivity,
+  });
 
   final void Function(String text) onText;
   final void Function(String message) onStatus;
+  final void Function(bool speaking)? onSpeechActivity;
 
   static const int sampleRate = 16000;
   static const int _windowSamples = sampleRate * 5;
@@ -93,6 +99,7 @@ class WhisperAsrWorker {
   bool _running = false;
   bool _following = false;
   bool _speechDetected = false;
+  bool _lastSpeechActive = false;
   Isolate? _isolate;
   ReceivePort? _events;
   StreamSubscription<dynamic>? _eventSub;
@@ -176,11 +183,20 @@ class WhisperAsrWorker {
     _sinceRequest = 0;
     _gate.reset();
     _speechDetected = false;
+    if (_lastSpeechActive) {
+      _lastSpeechActive = false;
+      onSpeechActivity?.call(false);
+    }
   }
 
   void addPcm(Uint8List pcm) {
     if (!_running || !_following || pcm.isEmpty) return;
     _gate.addPcm(pcm);
+    final speaking = _gate.currentlySpeaking;
+    if (speaking != _lastSpeechActive) {
+      _lastSpeechActive = speaking;
+      onSpeechActivity?.call(speaking);
+    }
     if (!_speechDetected && _gate.hasNewSpeech) {
       _speechDetected = true;
       onStatus('Fala detectada. Analisando em português...');

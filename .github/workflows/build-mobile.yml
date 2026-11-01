@@ -43,12 +43,36 @@ jobs:
               configurations.configureEach {
                   resolutionStrategy.eachDependency {
                       if (requested.group == "androidx.media3") {
-                          useVersion("1.8.1")
+                          useVersion("1.9.4")
                       }
                   }
               }
           }
           EOF
+      - name: Adaptar native_video_editor ao Media3 1.9.4
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+
+          cache = Path(os.environ.get('PUB_CACHE') or (Path.home() / '.pub-cache'))
+          kotlin = cache / 'hosted' / 'pub.dev' / 'native_video_editor-0.4.0' / 'android' / 'src' / 'main' / 'kotlin' / 'com' / 'example' / 'native_video_editor'
+          original = 'EditedMediaItemSequence('
+          for filename in ('AudioMergerPipeline.kt', 'ImageComposerPipeline.kt'):
+              path = kotlin / filename
+              if not path.is_file():
+                  raise SystemExit(f'Pacote Kotlin não encontrado: {path}')
+              source = path.read_text(encoding='utf-8')
+              occurrences = source.count(original)
+              if occurrences != 2:
+                  raise SystemExit(f'Esperadas 2 chamadas antigas em {filename}, encontradas {occurrences}. Interrompido para não alterar código desconhecido.')
+              # Primeiro item: vídeo. Segundo item: áudio.
+              source = source.replace(original, 'EditedMediaItemSequence.withVideoFrom(', 1)
+              source = source.replace(original, 'EditedMediaItemSequence.withAudioFrom(', 1)
+              path.write_text(source, encoding='utf-8')
+              print(f'{filename}: duas chamadas migradas para a API Media3 1.9+')
+          PYTHON
       - name: Compilar APK de teste
         run: flutter build apk --debug
       - uses: actions/upload-artifact@v4

@@ -5,14 +5,21 @@ on:
   workflow_dispatch:
     inputs:
       modelo:
-        description: 'Modelo Whisper (base=mais preciso, tiny=mais rápido)'
+        description: 'Reconhecimento: streaming pt-BR (novo) ou Whisper'
         required: true
-        default: 'base'
+        default: 'streaming'
         type: choice
-        options: [base, tiny, small]
+        options: [streaming, base, tiny, small]
+      plataforma:
+        description: 'Compilar Android, iPhone ou ambos (iPhone sem assinatura)'
+        required: true
+        default: 'android'
+        type: choice
+        options: [android, ios, ambos]
 
 jobs:
   android:
+    if: inputs.plataforma == 'android' || inputs.plataforma == 'ambos'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,8 +35,16 @@ jobs:
         run: flutter create --platforms=android --project-name=teleprompter_ai .
       - name: Configurar permissões
         run: python3 scripts/configurar_plataformas.py --platform android
-      - name: Instalar reconhecimento offline
-        run: python3 scripts/instalar_modelo.py --model '${{ inputs.modelo }}'
+      - name: Instalar modelo de reconhecimento
+        shell: bash
+        run: |
+          if [ '${{ inputs.modelo }}' = 'streaming' ]; then
+            python3 scripts/instalar_streaming.py
+            # Whisper Tiny: alternativa caso o streaming não inicialize.
+            python3 scripts/instalar_modelo.py --model tiny
+          else
+            python3 scripts/instalar_modelo.py --model '${{ inputs.modelo }}'
+          fi
       - name: Dependências e análise
         run: |
           flutter pub get
@@ -92,6 +107,7 @@ jobs:
           if-no-files-found: error
 
   ios:
+    if: inputs.plataforma == 'ios' || inputs.plataforma == 'ambos'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -103,8 +119,16 @@ jobs:
         run: flutter create --platforms=ios --project-name=teleprompter_ai .
       - name: Configurar permissões
         run: python3 scripts/configurar_plataformas.py --platform ios
-      - name: Instalar reconhecimento offline
-        run: python3 scripts/instalar_modelo.py --model '${{ inputs.modelo }}'
+      - name: Instalar modelo de reconhecimento
+        shell: bash
+        run: |
+          if [ '${{ inputs.modelo }}' = 'streaming' ]; then
+            python3 scripts/instalar_streaming.py
+            # Whisper Tiny: alternativa caso o streaming não inicialize.
+            python3 scripts/instalar_modelo.py --model tiny
+          else
+            python3 scripts/instalar_modelo.py --model '${{ inputs.modelo }}'
+          fi
       - name: Dependências e análise
         run: |
           flutter pub get

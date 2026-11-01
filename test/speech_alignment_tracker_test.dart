@@ -40,6 +40,23 @@ void main() {
     expect(tracker.accept('dia hoje vamos'), 3);
   });
 
+  test('inicia com duas palavras claras, sem exigir a frase completa', () {
+    final tracker = SpeechAlignmentTracker(
+        ScriptMatcher('Bom dia hoje vamos apresentar a nossa ideia.'));
+    expect(tracker.accept('Bom dia'), 1);
+    expect(tracker.accept('Bom dia'), isNull);
+    expect(tracker.accept('hoje vamos'), 3);
+    expect(tracker.index, 3);
+  });
+
+  test('não faz salto por uma palavra isolada depois de uma pausa', () {
+    final tracker = SpeechAlignmentTracker(ScriptMatcher(
+        'Bom dia hoje vamos apresentar o projeto completo e detalhado.'));
+    expect(tracker.accept('Bom dia hoje'), 2);
+    expect(tracker.accept('projeto'), isNull);
+    expect(tracker.index, 2);
+  });
+
   test('texto inventado não produz correspondência', () {
     final script = ScriptMatcher('O vídeo foi gravado no estúdio da agência.');
     expect(script.align('galáxia universo tempestade arqueologia', 0), isNull);

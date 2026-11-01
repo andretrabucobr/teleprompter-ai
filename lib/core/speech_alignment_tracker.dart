@@ -11,6 +11,7 @@ class SpeechAlignmentTracker {
   int? _pending;
   int _pendingVotes = 0;
   String? _lastHypothesis;
+  bool _lastWasFinal = false;
 
   int get index => _index;
 
@@ -20,28 +21,45 @@ class SpeechAlignmentTracker {
     _pending = null;
     _pendingVotes = 0;
     _lastHypothesis = null;
+    _lastWasFinal = false;
   }
 
   /// Retorna uma nova posição apenas quando o alinhamento é confiável.
   int? accept(String transcript, {bool isFinal = false}) {
     final normalized = ScriptMatcher.tokenize(transcript)
         .map((word) => word.normalized).join(' ');
-    if (normalized.isEmpty || normalized == _lastHypothesis) return null;
+    if (normalized.isEmpty) return null;
+    // A hipótese final pode repetir exatamente a parcial; não a descartar,
+    // porque o resultado final tem mais peso em saltos maiores.
+    if (normalized == _lastHypothesis && (!isFinal || _lastWasFinal)) {
+      return null;
+    }
     _lastHypothesis = normalized;
+    _lastWasFinal = isFinal;
     final match = matcher.align(transcript, _index, finalResult: isFinal);
     if (match == null || match.index <= _index) return null;
     final jump = _index < 0 ? match.index + 1 : match.index - _index;
 
-    final immediate = (_index < 0 && match.matchedWords >= 3 &&
-            match.confidence >= .76) ||
-        (jump <= 12 && match.matchedWords >= 2 &&
-            match.confidence >= .75) ||
-        (jump <= 25 && match.matchedWords >= 4 &&
-            match.confidence >= .82);
-    if (immediate) {
-      return _commit(match.index);
-    }
-    if (!isFinal || match.matchedWords < 5 || match.confidence < .84) {
+    // Duas palavras inequívocas já bastam para seguir frases curtas no
+    // início. Nas demais situações, exige mais evidência conforme o salto.
+    // Evita travar até o terceiro/quarto termo em "Bom dia" ou "Olá pessoal".
+    final immediate = _index < 0
+        ? (jump <= 8 && match.matchedWords >= 2 &&
+                match.exactWords >= 2 && match.confidence >= .95) ||
+            (jump <= 24 && match.matchedWords >= 3 &&
+                match.exactWords >= 2 && match.confidence >= .76)
+        : (jump <= 8 && match.matchedWords >= 2 &&
+                match.exactWords >= 1 && match.confidence >= .84) ||
+            (jump <= 16 && match.matchedWords >= 3 &&
+                match.exactWords >= 2 && match.confidence >= .78) ||
+            (jump <= 25 && match.matchedWords >= 4 &&
+                match.exactWords >= 3 && match.confidence >= .82);
+    if (immediate) return _commit(match.index);
+
+    // Nunca avançar grandes trechos apenas por uma palavra repetida ou uma
+    // transcrição instável. São necessárias duas janelas finais compatíveis.
+    if (!isFinal || match.matchedWords < 4 ||
+        match.exactWords < 3 || match.confidence < .84) {
       return null;
     }
     if (_pending != null && (match.index - _pending!).abs() <= 5) {

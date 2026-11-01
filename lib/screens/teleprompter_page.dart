@@ -4,6 +4,7 @@ import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -56,10 +57,13 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   List<CameraDescription> _cameras = [];
   Timer? _ticker;
   Timer? _saveTimer;
+  Timer? _fullScreenControlsTimer;
 
   PrompterMode _mode = PrompterMode.external;
   ScrollMode _scrollMode = ScrollMode.speed;
   bool _editing = true;
+  bool _fullScreen = false;
+  bool _fullScreenControlsVisible = false;
   bool _playing = false;
   bool _mirror = false;
   bool _recording = false;
@@ -129,6 +133,82 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   }
 
   void _broadcast() => _host?.sendState();
+
+  /// A tela de leitura ocupa o display do aplicativo. A ocultação das barras
+  /// do sistema é best-effort: Android com target API 36+ exige edge-to-edge.
+  void _enterFullScreen() {
+    FocusManager.instance.primaryFocus?.unfocus();
+    _fullScreenControlsTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        _editing = false;
+        _fullScreen = true;
+        _fullScreenControlsVisible = false;
+      });
+    }
+    unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky)
+        .catchError((Object _) {}));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _fullScreen) _scrollToActive();
+    });
+  }
+
+  void _exitFullScreen() {
+    _fullScreenControlsTimer?.cancel();
+    if (mounted) {
+      setState(() {
+        _fullScreen = false;
+        _fullScreenControlsVisible = false;
+      });
+    }
+    unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge)
+        .catchError((Object _) {}));
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _scrollToActive();
+    });
+  }
+
+  void _toggleFullScreenControls() {
+    if (!_fullScreen || !mounted) return;
+    _fullScreenControlsTimer?.cancel();
+    final visible = !_fullScreenControlsVisible;
+    setState(() => _fullScreenControlsVisible = visible);
+    if (visible && _playing) _autoHideFullScreenControls();
+  }
+
+  void _autoHideFullScreenControls() {
+    _fullScreenControlsTimer?.cancel();
+    _fullScreenControlsTimer = Timer(const Duration(seconds: 6), () {
+      if (mounted && _fullScreen && _playing) {
+        setState(() => _fullScreenControlsVisible = false);
+      }
+    });
+  }
+
+  Future<void> _togglePlayback() async {
+    if (_playing) {
+      await _pause();
+    } else {
+      try {
+        await _play();
+      } catch (_) {
+        // Mensagem detalhada já exibida no próprio aplicativo.
+      }
+    }
+  }
+
+  Future<void> _toggleRecording() async {
+    if (_recordingBusy) return;
+    try {
+      if (_recording) {
+        await _stopRecording();
+      } else {
+        await _startRecording();
+      }
+    } catch (_) {
+      // Mensagem detalhada já exibida no próprio aplicativo.
+    }
+  }
 
   Map<String, dynamic> _snapshot() => {
         'playing': _playing,
@@ -203,8 +283,15 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   }
 
   Future<void> _play() async {
-    if (_playing || _playPending) return;
+    if (_playing) {
+      _enterFullScreen();
+      return;
+    }
+    if (_playPending) return;
+    // Entrar na tela cheia ANTES de carregar o Whisper (pode ser demorado).
+    _enterFullScreen();
     _playPending = true;
+    if (mounted) setState(() {});
     final generation = ++_playGeneration;
     try {
       if (_matcher.words.isEmpty) {
@@ -220,8 +307,10 @@ class _TeleprompterPageState extends State<TeleprompterPage>
           try {
             await _capture.start(followVoice: true, saveAudio: false);
           } catch (offlineError) {
-            if (mounted) setState(() => _voiceStatus =
-                'Modelo local não disponível, usando reconhecimento nativo.');
+            if (mounted) {
+              setState(() => _voiceStatus =
+                  'Modelo local não disponível; usando reconhecimento nativo.');
+            }
             final ready = await _speech.start();
             if (!ready) {
               throw StateError('ASR offline e nativo indisponíveis: $offlineError');
@@ -238,14 +327,22 @@ class _TeleprompterPageState extends State<TeleprompterPage>
         _ticker = Timer.periodic(const Duration(milliseconds: 33), _tick);
       }
       if (mounted) {
-        setState(() { _editing = false; _playing = true; });
+        setState(() {
+          _editing = false;
+          _playing = true;
+        });
+        if (_fullScreenControlsVisible) _autoHideFullScreenControls();
       }
       _broadcast();
     } catch (e) {
-      if (mounted) _notice('Não foi possível iniciar a leitura: $e');
+      if (mounted) {
+        setState(() => _fullScreenControlsVisible = true);
+        _notice('Não foi possível iniciar a leitura: $e');
+      }
       rethrow;
     } finally {
       _playPending = false;
+      if (mounted) setState(() {});
     }
   }
 
@@ -261,7 +358,13 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     } else if (_capture.running) {
       await _capture.discard();
     }
-    if (mounted) setState(() => _playing = false);
+    if (mounted) {
+      setState(() {
+        _playing = false;
+        if (_fullScreen) _fullScreenControlsVisible = true;
+      });
+    }
+    _fullScreenControlsTimer?.cancel();
     _broadcast();
   }
 
@@ -288,8 +391,12 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       return;
     }
     await _pause();
-    if (mounted) setState(() => _scrollMode = mode);
+    if (!mounted) return;
+    setState(() => _scrollMode = mode);
     _broadcast();
+    // Selecionar "Voz" equivale a "Iniciar por voz": ativa o microfone e
+    // exibe imediatamente o roteiro em tela cheia.
+    if (mode == ScrollMode.voice) await _togglePlayback();
   }
 
   Future<void> _changeMode(PrompterMode mode) async {
@@ -349,11 +456,11 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     }
     _recordingBusy = true;
     try {
-      if (mounted && _editing) setState(() => _editing = false);
+      _enterFullScreen();
       // O microfone é aberto apenas aqui (ou já estava aberto pela leitura).
       await _capture.start(followVoice: _scrollMode == ScrollMode.voice);
-      if (_scrollMode == ScrollMode.voice && !_playing) {
-        // Iniciar gravação no modo Voz também inicia a leitura inteligente.
+      if (!_playing) {
+        // Gravar inicia a leitura no modo escolhido (voz ou velocidade).
         await _play();
       }
       final startBefore = _capture.sampleCount;
@@ -670,15 +777,10 @@ class _TeleprompterPageState extends State<TeleprompterPage>
             IconButton(tooltip: 'Voltar 12 palavras',
                 onPressed: () => _seek(-12), icon: const Icon(Icons.fast_rewind)),
             Expanded(child: FilledButton.icon(
-              onPressed: () async {
-                if (_playing) {
-                  await _pause();
-                } else {
-                  try { await _play(); } catch (_) { /* mensagem já exibida */ }
-                }
-              },
+              onPressed: _togglePlayback,
               icon: Icon(_playing ? Icons.pause : Icons.play_arrow),
-              label: Text(_playing ? 'Pausar' : 'Iniciar'),
+              label: Text(_playing ? 'Pausar' :
+                  _scrollMode == ScrollMode.voice ? 'Iniciar por voz' : 'Iniciar'),
             )),
             IconButton(tooltip: 'Avançar 12 palavras',
                 onPressed: () => _seek(12), icon: const Icon(Icons.fast_forward)),
@@ -689,15 +791,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                 tooltip: _recording ? 'Parar gravação' : 'Gravar vídeo',
                 icon: Icon(_recording ? Icons.stop_circle : Icons.fiber_manual_record,
                     color: Colors.redAccent),
-                onPressed: _recordingBusy ? null : () async {
-                  try {
-                    if (_recording) {
-                      await _stopRecording();
-                    } else {
-                      await _startRecording();
-                    }
-                  } catch (_) { /* erro detalhado via SnackBar */ }
-                },
+                onPressed: _recordingBusy ? null : _toggleRecording,
               ),
           ]),
           if (_latestVideo != null)
@@ -707,6 +801,113 @@ class _TeleprompterPageState extends State<TeleprompterPage>
               label: const Text('Exportar última gravação'),
             ),
         ]),
+      );
+
+  Widget _fullScreenToolbar() => SafeArea(
+        child: Stack(children: [
+          Positioned(
+            top: 8,
+            right: 10,
+            child: IconButton.filledTonal(
+              tooltip: 'Sair da tela cheia',
+              onPressed: _exitFullScreen,
+              icon: const Icon(Icons.fullscreen_exit),
+            ),
+          ),
+          if (_scrollMode == ScrollMode.voice)
+            Positioned(
+              top: 12,
+              left: 12,
+              right: 66,
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: .80),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(_voiceStatus, maxLines: 2,
+                          overflow: TextOverflow.ellipsis),
+                      if (_lastRecognizedText.isNotEmpty)
+                        Text('Ouvido: $_lastRecognizedText',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 12)),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          Positioned(
+            bottom: 18,
+            left: 12,
+            right: 12,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: .88),
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Row(children: [
+                IconButton(
+                  tooltip: 'Voltar 12 palavras',
+                  onPressed: () => _seek(-12),
+                  icon: const Icon(Icons.fast_rewind),
+                ),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: _playPending ? null : _togglePlayback,
+                    icon: Icon(_playing ? Icons.pause : Icons.play_arrow),
+                    label: Text(_playing ? 'Pausar' : 'Continuar'),
+                  ),
+                ),
+                IconButton(
+                  tooltip: 'Avançar 12 palavras',
+                  onPressed: () => _seek(12),
+                  icon: const Icon(Icons.fast_forward),
+                ),
+                if (_mode == PrompterMode.camera)
+                  IconButton(
+                    tooltip: _recording ? 'Parar gravação' : 'Gravar',
+                    onPressed: _recordingBusy ? null : _toggleRecording,
+                    icon: Icon(_recording ? Icons.stop_circle
+                        : Icons.fiber_manual_record, color: Colors.redAccent),
+                  ),
+              ]),
+            ),
+          ),
+        ]),
+      );
+
+  Widget _fullScreenReader() => Stack(
+        fit: StackFit.expand,
+        children: [
+          GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTap: _toggleFullScreenControls,
+            child: _reader(),
+          ),
+          if (_playPending)
+            IgnorePointer(
+              child: Container(
+                color: Colors.black.withValues(alpha: .5),
+                child: Center(
+                  child: Column(mainAxisSize: MainAxisSize.min, children: [
+                    const CircularProgressIndicator(),
+                    const SizedBox(height: 14),
+                    Text(_scrollMode == ScrollMode.voice
+                        ? 'Preparando reconhecimento de voz...'
+                        : 'Preparando leitura...'),
+                  ]),
+                ),
+              ),
+            ),
+          if (_fullScreenControlsVisible) _fullScreenToolbar(),
+        ],
       );
 
   @override
@@ -727,6 +928,9 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     WidgetsBinding.instance.removeObserver(this);
     _ticker?.cancel();
     _saveTimer?.cancel();
+    _fullScreenControlsTimer?.cancel();
+    unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge)
+        .catchError((Object _) {}));
     _speech.dispose();
     _capture.discard().catchError((Object _) {});
     _host?.stop();
@@ -737,92 +941,103 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   }
 
   @override
-  Widget build(BuildContext context) => Scaffold(
-        appBar: AppBar(
-          title: const Text('Teleprompter AI'),
-          actions: [
-            if (_remoteConnected)
-              const Padding(padding: EdgeInsets.symmetric(horizontal: 4),
-                  child: Icon(Icons.cast_connected, color: Colors.greenAccent)),
-            PopupMenuButton<String>(
-              tooltip: 'Controle remoto',
-              icon: const Icon(Icons.settings_remote),
-              onSelected: (action) {
-                if (action == 'host') {
-                  _showHostPairing();
-                } else {
-                  Navigator.push(context, MaterialPageRoute(
-                    builder: (_) => const RemoteControllerPage(),
-                  ));
-                }
-              },
-              itemBuilder: (_) => const [
-                PopupMenuItem(value: 'host', child: Text('Exibir QR para ser controlado')),
-                PopupMenuItem(value: 'controller', child: Text('Ser controle de outro aparelho')),
-              ],
-            ),
-            IconButton(
-              tooltip: _editing ? 'Abrir leitor' : 'Editar roteiro',
-              icon: Icon(_editing ? Icons.chrome_reader_mode : Icons.edit_note),
-              onPressed: _recording ? null : () async {
-                await _pause();
-                if (mounted) setState(() => _editing = !_editing);
-              },
-            ),
-          ],
-        ),
-        body: SafeArea(child: Column(children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            child: Row(children: [
-              Expanded(child: ChoiceChip(
-                label: const Text('Leitor externo'),
-                selected: _mode == PrompterMode.external,
-                onSelected: _recording || _recordingBusy ? null : (_) => _changeMode(PrompterMode.external),
-              )),
-              const SizedBox(width: 8),
-              Expanded(child: ChoiceChip(
-                label: const Text('Câmera integrada'),
-                selected: _mode == PrompterMode.camera,
-                onSelected: _recording || _recordingBusy ? null : (_) => _changeMode(PrompterMode.camera),
-              )),
-              if (_mode == PrompterMode.camera)
-                IconButton(
-                  tooltip: 'Trocar câmera',
-                  onPressed: _recording || _recordingBusy || _cameraBusy ? null : () => _initCamera(changeLens: true),
-                  icon: const Icon(Icons.cameraswitch),
-                ),
-            ]),
-          ),
-          Expanded(
-            child: _editing
-                ? Padding(
-                    padding: const EdgeInsets.all(12),
-                    child: TextField(
-                      controller: _script,
-                      expands: true,
-                      maxLines: null,
-                      minLines: null,
-                      decoration: const InputDecoration(
-                        border: OutlineInputBorder(),
-                        labelText: 'Edite seu roteiro (salvo automaticamente)',
-                        alignLabelWithHint: true,
-                      ),
-                    ),
-                  )
-                : _reader(),
-          ),
-          if (_editing)
-            Padding(
-              padding: const EdgeInsets.all(14),
-              child: FilledButton.icon(
-                onPressed: () => setState(() => _editing = false),
-                icon: const Icon(Icons.play_circle_outline),
-                label: const Text('Abrir teleprompter'),
+  Widget build(BuildContext context) => PopScope(
+        canPop: !_fullScreen,
+        onPopInvokedWithResult: (didPop, _) {
+          if (!didPop && _fullScreen) _exitFullScreen();
+        },
+        child: Scaffold(
+          appBar: _fullScreen ? null : AppBar(
+            title: const Text('Teleprompter AI'),
+            actions: [
+              if (_remoteConnected)
+                const Padding(padding: EdgeInsets.symmetric(horizontal: 4),
+                    child: Icon(Icons.cast_connected, color: Colors.greenAccent)),
+              PopupMenuButton<String>(
+                tooltip: 'Controle remoto',
+                icon: const Icon(Icons.settings_remote),
+                onSelected: (action) {
+                  if (action == 'host') {
+                    _showHostPairing();
+                  } else {
+                    Navigator.push(context, MaterialPageRoute(
+                      builder: (_) => const RemoteControllerPage(),
+                    ));
+                  }
+                },
+                itemBuilder: (_) => const [
+                  PopupMenuItem(value: 'host', child: Text('Exibir QR para ser controlado')),
+                  PopupMenuItem(value: 'controller', child: Text('Ser controle de outro aparelho')),
+                ],
               ),
-            )
-          else
-            _readerControls(),
-        ])),
+              IconButton(
+                tooltip: _editing ? 'Abrir leitor' : 'Editar roteiro',
+                icon: Icon(_editing ? Icons.chrome_reader_mode : Icons.edit_note),
+                onPressed: _recording ? null : () async {
+                  await _pause();
+                  if (mounted) setState(() => _editing = !_editing);
+                },
+              ),
+            ],
+          ),
+          body: _fullScreen
+              ? _fullScreenReader()
+              : SafeArea(child: Column(children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    child: Row(children: [
+                      Expanded(child: ChoiceChip(
+                        label: const Text('Leitor externo'),
+                        selected: _mode == PrompterMode.external,
+                        onSelected: _recording || _recordingBusy ? null :
+                            (_) => _changeMode(PrompterMode.external),
+                      )),
+                      const SizedBox(width: 8),
+                      Expanded(child: ChoiceChip(
+                        label: const Text('Câmera integrada'),
+                        selected: _mode == PrompterMode.camera,
+                        onSelected: _recording || _recordingBusy ? null :
+                            (_) => _changeMode(PrompterMode.camera),
+                      )),
+                      if (_mode == PrompterMode.camera)
+                        IconButton(
+                          tooltip: 'Trocar câmera',
+                          onPressed: _recording || _recordingBusy || _cameraBusy ?
+                              null : () => _initCamera(changeLens: true),
+                          icon: const Icon(Icons.cameraswitch),
+                        ),
+                    ]),
+                  ),
+                  Expanded(
+                    child: _editing
+                        ? Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: TextField(
+                              controller: _script,
+                              expands: true,
+                              maxLines: null,
+                              minLines: null,
+                              decoration: const InputDecoration(
+                                border: OutlineInputBorder(),
+                                labelText: 'Edite seu roteiro (salvo automaticamente)',
+                                alignLabelWithHint: true,
+                              ),
+                            ),
+                          )
+                        : _reader(),
+                  ),
+                  if (_editing)
+                    Padding(
+                      padding: const EdgeInsets.all(14),
+                      child: FilledButton.icon(
+                        onPressed: () => setState(() => _editing = false),
+                        icon: const Icon(Icons.play_circle_outline),
+                        label: const Text('Abrir teleprompter'),
+                      ),
+                    )
+                  else
+                    _readerControls(),
+                ])),
+        ),
       );
 }

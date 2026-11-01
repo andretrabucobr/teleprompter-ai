@@ -1,4 +1,4 @@
-# Teleprompter AI — MVP v0.4 (Android e iPhone)
+# Teleprompter AI — MVP v0.5 (Android e iPhone)
 
 **Estado:** código-fonte experimental; **NÃO é um APK/IPA instalado e validado**.
 Requer Flutter e os SDKs da plataforma para compilar. O modelo Whisper não
@@ -9,6 +9,18 @@ acompanha este ZIP, porque ocupa centenas de MB.
 > No Windows, o arquivo `COMPILAR_ANDROID_WINDOWS.bat` conduz a compilação Android
 > depois da instalação do Flutter SDK, Android SDK, JDK 17 e Python.
 > A configuração nativa agora é **separada por plataforma**, sem exigir iOS no Windows.
+
+## Alterações da v0.5 — leitura imersiva e voz
+
+- Iniciar, selecionar **Voz** ou iniciar **Gravar** abre a leitura em tela cheia.
+  Toque na tela para exibir controles temporários e botão de saída.
+- Reduzido o intervalo mínimo entre novas análises para **0,9 s** (com
+  limitação da velocidade real do hardware/modelo); o detector de voz aceita
+  níveis de fala mais baixos. Transcrições e status podem ser inspecionados.
+- As primeiras duas palavras claramente identificadas já podem mover a leitura;
+  o alinhamento evita saltos grandes sem confirmação.
+- Mantenha o workflow com patch do pacote Media3, já usado na compilação
+  anterior. Veja [`docs/ATUALIZACAO_V05.md`](docs/ATUALIZACAO_V05.md).
 
 ## Novidades de reconhecimento da v0.4
 
@@ -22,8 +34,8 @@ acompanha este ZIP, porque ocupa centenas de MB.
   alimenta Whisper e, quando há gravação, o WAV para mesclagem com o vídeo.
 - Filtro de atividade de voz **por energia** (não um VAD neural): reduz chamadas
   do reconhecedor durante o silêncio, sem garantir rejeição de todo ruído.
-- Janela recente de até **5 segundos**, tentativa de nova análise após **1,2 s**
-  de áudio novo ou no fim de uma frase. **Isso não garante 1,2 s de latência**:
+- Janela recente de até **5 segundos**, tentativa de nova análise após **0,9 s**
+  de áudio novo ou no fim de uma frase. **Isso não garante 0,9 s de latência**:
   inferência e carga do dispositivo também contam.
 - Correspondência texto/roteiro por alinhamento flexível, com palavras omitidas,
   erros leves e interjeições, desambiguação por proximidade e dupla confirmação
@@ -107,7 +119,8 @@ O workflow está **preparado, não foi executado**. Caso passe, disponibilizará
 
 1. Instale o app nos dispositivos depois da compilação.
 2. Na tela de edição, cole o roteiro e abra o leitor.
-3. Selecione **Voz**. Fale as frases em português e observe a palavra destacada.
+3. Selecione **Voz**. A leitura abre em tela cheia e ativa o microfone.
+   Toque na tela para ver os controles e o diagnóstico `Ouvido:`; depois saia pelo botão.
 4. Teste pausas, frases repetidas, palavras puladas e leitura em velocidades
    diferentes. Os botões de avançar/voltar continuam disponíveis.
 5. Para câmera integrada, selecione Câmera, conceda as permissões e grave.

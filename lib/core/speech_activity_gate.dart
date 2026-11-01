@@ -17,15 +17,17 @@ class SpeechActivityGate {
   int _lastSpeechFrame = -100000;
   int _frameSamples = 0;
   double _squareSum = 0;
-  double _noiseFloor = .0018;
+  double _noiseFloor = .0012;
 
   int get newSpeechFrames => _newSpeechFrames;
   int get recentSpeechFrames => _speechFrames;
-  bool get recentSpeech => _speechFrames >= 12 &&
-      (_frameCount - _lastSpeechFrame) < 125; // até 2,5 s após a fala
-  bool get justPaused => _frameCount - _lastSpeechFrame >= 27 &&
+  // Menor sensibilidade mínima para vozes baixas, mas sempre relativa ao
+  // ruído ambiente. Isto não substitui um VAD neural.
+  bool get recentSpeech => _speechFrames >= 8 &&
+      (_frameCount - _lastSpeechFrame) < 110; // até 2,2 s após a fala
+  bool get justPaused => _frameCount - _lastSpeechFrame >= 23 &&
       _frameCount - _lastSpeechFrame <= 70;
-  bool get hasNewSpeech => _newSpeechFrames >= 10;
+  bool get hasNewSpeech => _newSpeechFrames >= 7;
 
   void addPcm(Uint8List bytes) {
     final pcm = ByteData.sublistView(bytes);
@@ -42,7 +44,7 @@ class SpeechActivityGate {
   }
 
   void _recordFrame(double rms) {
-    final threshold = math.max(.0055, _noiseFloor * 2.7);
+    final threshold = math.max(.0030, _noiseFloor * 2.3);
     final spoken = rms >= threshold;
     if (!spoken) {
       _noiseFloor = (_noiseFloor * .96 + rms * .04).clamp(.0001, .04).toDouble();
@@ -70,6 +72,6 @@ class SpeechActivityGate {
     _lastSpeechFrame = -100000;
     _frameSamples = 0;
     _squareSum = 0;
-    _noiseFloor = .0018;
+    _noiseFloor = .0012;
   }
 }

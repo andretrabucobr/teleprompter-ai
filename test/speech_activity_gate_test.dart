@@ -33,6 +33,15 @@ void main() {
     expect(gate.recentSpeech, isFalse);
   });
 
+  test('fala de volume baixo é detectada sem avançar no silêncio', () {
+    final gate = SpeechActivityGate();
+    gate.addPcm(syntheticPcm(0, 60));
+    expect(gate.recentSpeech, isFalse);
+    gate.addPcm(syntheticPcm(.0042, 14));
+    expect(gate.recentSpeech, isTrue);
+    expect(gate.hasNewSpeech, isTrue);
+  });
+
   test('voz antiga expira durante pausa longa', () {
     final gate = SpeechActivityGate();
     gate.addPcm(syntheticPcm(.025, 30));

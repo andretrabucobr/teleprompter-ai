@@ -81,7 +81,7 @@ class WhisperAsrWorker {
 
   static const int sampleRate = 16000;
   static const int _windowSamples = sampleRate * 5;
-  static const int _hopSamples = sampleRate * 12 ~/ 10; // 1,2 s
+  static const int _hopSamples = sampleRate * 9 ~/ 10; // 0,9 s
 
   final Float32List _ring = Float32List(_windowSamples);
   final SpeechActivityGate _gate = SpeechActivityGate();
@@ -92,6 +92,7 @@ class WhisperAsrWorker {
   bool _busy = false;
   bool _running = false;
   bool _following = false;
+  bool _speechDetected = false;
   Isolate? _isolate;
   ReceivePort? _events;
   StreamSubscription<dynamic>? _eventSub;
@@ -114,13 +115,18 @@ class WhisperAsrWorker {
           _running = true;
           _following = true;
           if (!ready.isCompleted) ready.complete();
-          onStatus('Reconhecimento local de português iniciado.');
+          onStatus('Modelo pronto. Pode começar a falar.');
         case 'result':
           _busy = false;
           final value = message['text'];
           if (_running && _following && message['epoch'] == _epoch &&
-              value is String && value.trim().isNotEmpty) {
-            onText(value);
+              value is String) {
+            if (value.trim().isNotEmpty) {
+              onText(value);
+              onStatus('Reconhecimento ativo');
+            } else if (_speechDetected) {
+              onStatus('Microfone captou fala, mas ainda não identificou palavras.');
+            }
           }
           _requestDecode();
         case 'error':
@@ -169,11 +175,16 @@ class WhisperAsrWorker {
     _filled = 0;
     _sinceRequest = 0;
     _gate.reset();
+    _speechDetected = false;
   }
 
   void addPcm(Uint8List pcm) {
     if (!_running || !_following || pcm.isEmpty) return;
     _gate.addPcm(pcm);
+    if (!_speechDetected && _gate.hasNewSpeech) {
+      _speechDetected = true;
+      onStatus('Fala detectada. Analisando em português...');
+    }
     final view = ByteData.sublistView(pcm);
     for (var i = 0; i + 1 < view.lengthInBytes; i += 2) {
       _ring[_total % _windowSamples] = view.getInt16(i, Endian.little) / 32768.0;

@@ -43,7 +43,12 @@ class SpeechAlignmentTracker {
     // Duas palavras inequívocas já bastam para seguir frases curtas no
     // início. Nas demais situações, exige mais evidência conforme o salto.
     // Evita travar até o terceiro/quarto termo em "Bom dia" ou "Olá pessoal".
-    final immediate = _index < 0
+    // Ex.: "meu fio" ouvido para "meu filho" no roteiro. Só avança com
+    // outra palavra EXATA como âncora e deslocamento de no máximo 5 palavras.
+    final shortLhMatch = jump <= 5 && match.matchedWords == 2 &&
+        match.exactWords == 1 && match.phoneticWords == 1 &&
+        match.confidence >= .95;
+    final immediate = shortLhMatch || (_index < 0
         ? (jump <= 8 && match.matchedWords >= 2 &&
                 match.exactWords >= 2 && match.confidence >= .95) ||
             (jump <= 24 && match.matchedWords >= 3 &&
@@ -53,7 +58,7 @@ class SpeechAlignmentTracker {
             (jump <= 16 && match.matchedWords >= 3 &&
                 match.exactWords >= 2 && match.confidence >= .78) ||
             (jump <= 25 && match.matchedWords >= 4 &&
-                match.exactWords >= 3 && match.confidence >= .82);
+                match.exactWords >= 3 && match.confidence >= .82));
     if (immediate) return _commit(match.index);
 
     // Nunca avançar grandes trechos apenas por uma palavra repetida ou uma

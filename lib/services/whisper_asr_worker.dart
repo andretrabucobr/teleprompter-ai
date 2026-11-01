@@ -26,7 +26,7 @@ class WhisperModelFiles {
     try {
       chosenModel = (await rootBundle.loadString(
           'assets/models/whisper/installed-model.txt')).trim();
-      if (chosenModel != 'base' && chosenModel != 'tiny') {
+      if (!{'base', 'tiny', 'small'}.contains(chosenModel)) {
         throw StateError('Modelo desconhecido: $chosenModel');
       }
     } catch (error) {

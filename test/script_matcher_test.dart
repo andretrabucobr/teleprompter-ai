@@ -26,7 +26,37 @@ void main() {
     expect(result, isNotNull);
     expect(result!.index, inInclusiveRange(0, matcher.words.length - 1));
   });
-}
 
-// Casos de roteiros reais: palavras omitidas, repetições e transcrição parcial.
-// Os testes aqui exercitam o alinhamento textual, NÃO a precisão do Whisper.
+  test('LH: acompanha variantes ouvidas para lho, lha, lhi, lhu e lhe', () {
+    final examples = <(String, String)>[
+      ('Meu filho está aqui.', 'meu fio'),              // lho
+      ('Minha filha chegou.', 'minha filia'),          // lha
+      ('O olhinho fechou.', 'o oiinho'),                // lhi
+      ('Um malhudo chegou.', 'um maiudo'),             // lhu
+      ('A colher caiu.', 'a coier'),                   // lhe
+      ('Eu trabalho todos os dias.', 'eu trabaio'),   // lho longo
+      ('A folha verde caiu.', 'a foia'),              // lha reduzido
+    ];
+    for (final (script, spoken) in examples) {
+      final match = ScriptMatcher(script).align(spoken, -1);
+      expect(match, isNotNull, reason: '$script / $spoken');
+      final verified = match!;
+      expect(verified.index, 1, reason: '$script / $spoken');
+      expect(verified.phoneticWords, 1, reason: '$script / $spoken');
+      expect(verified.exactWords, 1, reason: '$script / $spoken');
+    }
+  });
+
+  test('não confunde escolha e escola nem dá progresso por uma palavra', () {
+    final matcher = ScriptMatcher('A escolha está correta.');
+    expect(matcher.align('a escola', -1), isNull);
+    expect(matcher.align('escoia', -1), isNull);
+  });
+
+  test('LH não permite salto arbitrário por duas palavras vagas', () {
+    final matcher = ScriptMatcher(
+        'Agora vamos conversar calmamente e lembrar que o meu filho chegou.');
+    final match = matcher.align('meu fio', 0);
+    expect(match, isNull);
+  });
+}

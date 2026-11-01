@@ -1,6 +1,6 @@
 name: teleprompter_ai
-version: 0.5.0+5
-description: Teleprompter com voz sensível, leitura imersiva e controle remoto LAN.
+version: 0.6.0+6
+description: Teleprompter com leitura ativa, correspondencia fonetica e controle remoto LAN.
 publish_to: none
 
 environment:
@@ -19,6 +19,7 @@ dependencies:
   record: ^7.1.2
   sherpa_onnx: ^1.13.8
   native_video_editor: ^0.4.0
+  wakelock_plus: ^1.8.1
 
 dev_dependencies:
   flutter_test:

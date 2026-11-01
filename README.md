@@ -1,4 +1,4 @@
-# Teleprompter AI — MVP v0.5 (Android e iPhone)
+# Teleprompter AI — MVP v0.6 (Android e iPhone)
 
 **Estado:** código-fonte experimental; **NÃO é um APK/IPA instalado e validado**.
 Requer Flutter e os SDKs da plataforma para compilar. O modelo Whisper não
@@ -146,3 +146,11 @@ O workflow está **preparado, não foi executado**. Caso passe, disponibilizará
   os pacotes necessários. Não há build validado nesta entrega.
 
 Mais detalhes em `docs/ESPECIFICACAO.md` e `docs/TESTES_DISPOSITIVOS.md`.
+
+
+## Atualização v0.6
+
+- Tela acordada durante leitura/gravação no aplicativo em primeiro plano (`wakelock_plus`).
+- Correspondência fonética contextual para dígrafo LH sem tratar palavras distintas como equivalentes indiscriminadamente.
+- Modelo opcional Whisper `small` para testes de maior precisão (modelo padrão `base`).
+- Consulte `docs/ATUALIZACAO_V06.md` para limitações e procedimentos de teste.

@@ -7,8 +7,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../core/script_matcher.dart';
+import '../core/screen_awake_policy.dart';
 import '../core/speech_alignment_tracker.dart';
 import '../services/remote_session.dart';
 import '../services/shared_audio_capture.dart';
@@ -58,6 +60,9 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   Timer? _ticker;
   Timer? _saveTimer;
   Timer? _fullScreenControlsTimer;
+  Future<void> _wakeLockSequence = Future<void>.value();
+  bool _foreground = true;
+  bool? _wakeLockRequested;
 
   PrompterMode _mode = PrompterMode.external;
   ScrollMode _scrollMode = ScrollMode.speed;
@@ -134,6 +139,28 @@ class _TeleprompterPageState extends State<TeleprompterPage>
 
   void _broadcast() => _host?.sendState();
 
+  /// Mantém o display ligado durante leitura, tela cheia, preparação ou
+  /// gravação. Solicitações são serializadas para uma desativação não ser
+  /// sobrescrita por uma ativação assíncrona que terminou depois.
+  void _syncScreenAwake() {
+    final enable = ScreenAwakePolicy.shouldKeepAwake(
+      foreground: _foreground,
+      fullScreen: _fullScreen,
+      playing: _playing,
+      recording: _recording,
+      preparing: _playPending || _recordingBusy,
+    );
+    if (_wakeLockRequested == enable) return;
+    _wakeLockRequested = enable;
+    _wakeLockSequence = _wakeLockSequence
+        .catchError((Object _) {})
+        .then((_) => enable ? WakelockPlus.enable() : WakelockPlus.disable())
+        .catchError((Object error) {
+          if (_wakeLockRequested == enable) _wakeLockRequested = null;
+          if (mounted) _notice('Não foi possível controlar a tela ativa: $error');
+        });
+  }
+
   /// A tela de leitura ocupa o display do aplicativo. A ocultação das barras
   /// do sistema é best-effort: Android com target API 36+ exige edge-to-edge.
   void _enterFullScreen() {
@@ -146,6 +173,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
         _fullScreenControlsVisible = false;
       });
     }
+    _syncScreenAwake();
     unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky)
         .catchError((Object _) {}));
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -161,6 +189,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
         _fullScreenControlsVisible = false;
       });
     }
+    _syncScreenAwake();
     unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge)
         .catchError((Object _) {}));
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -342,6 +371,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       rethrow;
     } finally {
       _playPending = false;
+      _syncScreenAwake();
       if (mounted) setState(() {});
     }
   }
@@ -365,6 +395,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       });
     }
     _fullScreenControlsTimer?.cancel();
+    _syncScreenAwake();
     _broadcast();
   }
 
@@ -468,6 +499,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       // Estimativa entre chamada/retorno, não timestamps nativos exatos.
       _recordStartSample = (startBefore + _capture.sampleCount) ~/ 2;
       if (mounted) setState(() => _recording = true);
+      _syncScreenAwake();
       _broadcast();
     } catch (e) {
       ++_playGeneration;
@@ -478,6 +510,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       rethrow;
     } finally {
       _recordingBusy = false;
+      _syncScreenAwake();
     }
   }
 
@@ -542,6 +575,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       _recordingBusy = false;
       if (mounted) setState(() => _recording = _camera?.value.isRecordingVideo ?? false);
       if (videoStopped) await _pause();
+      _syncScreenAwake();
       _broadcast();
     }
   }
@@ -914,6 +948,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     // O MVP é concebido para uso em primeiro plano. Não inicia gravação
     // ou reconhecimento a partir do segundo plano.
+    _foreground = state == AppLifecycleState.resumed;
+    _syncScreenAwake();
     if (state == AppLifecycleState.paused) {
       if (_recording) {
         _stopRecording().catchError((Object _) {});
@@ -926,6 +962,13 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _foreground = false;
+    _fullScreen = false;
+    _playing = false;
+    _recording = false;
+    _playPending = false;
+    _recordingBusy = false;
+    _syncScreenAwake();
     _ticker?.cancel();
     _saveTimer?.cancel();
     _fullScreenControlsTimer?.cancel();

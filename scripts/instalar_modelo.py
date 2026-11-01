@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Instala os modelos Whisper multilíngues INT8 distribuídos pelo sherpa-onnx.
 
-Base: prioriza precisão em português (mais CPU/memória).
+Small: prioriza reconhecimento de palavras difíceis (mais CPU/memória).
+Base: equilíbrio entre precisão e desempenho.
 Tiny: prioriza latência e aparelhos com menos recursos.
 Nenhuma transcrição é enviada à rede; o download ocorre somente no build.
 """
@@ -21,7 +22,7 @@ FILENAME = 'installed-model.txt'
 
 
 def install(model: str, source_archive: Path | None = None) -> None:
-    if model not in ('base', 'tiny'):
+    if model not in ('base', 'tiny', 'small'):
         raise ValueError('Modelo desconhecido')
     DEST.mkdir(parents=True, exist_ok=True)
     target_files = ['encoder.int8.onnx', 'decoder.int8.onnx', 'tokens.txt']
@@ -76,8 +77,8 @@ def install(model: str, source_archive: Path | None = None) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--model', choices=['tiny', 'base'], default='base',
-                        help='base = precisão; tiny = velocidade. Padrão: base')
+    parser.add_argument('--model', choices=['tiny', 'base', 'small'], default='base',
+                        help='small = maior precisão potencial; base = equilíbrio; tiny = velocidade. Padrão: base')
     parser.add_argument('--archive', type=Path,
                         help='Opcional: .tar.bz2 oficial já baixado (uso offline)')
     args = parser.parse_args()

@@ -61,4 +61,18 @@ void main() {
     final script = ScriptMatcher('O vídeo foi gravado no estúdio da agência.');
     expect(script.align('galáxia universo tempestade arqueologia', 0), isNull);
   });
+
+  test('alinhador avança perto de LH pronunciado diferentemente', () {
+    final tracker = SpeechAlignmentTracker(
+        ScriptMatcher('Meu filho chegou cedo e abriu a porta.'));
+    expect(tracker.accept('meu fio'), 1);
+    expect(tracker.accept('meu fio'), isNull);
+    expect(tracker.accept('chegou cedo'), 3);
+  });
+
+  test('duas aproximações de LH sem palavras exatas não bastam', () {
+    final tracker = SpeechAlignmentTracker(
+        ScriptMatcher('Filho trabalho agora.'));
+    expect(tracker.accept('fio trabaio'), isNull);
+  });
 }

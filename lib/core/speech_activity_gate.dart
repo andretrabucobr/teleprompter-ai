@@ -29,6 +29,11 @@ class SpeechActivityGate {
       _frameCount - _lastSpeechFrame <= 70;
   bool get hasNewSpeech => _newSpeechFrames >= 7;
 
+  /// Atividade atual com 0,4 s de tolerância a pequenas pausas entre sílabas.
+  /// Não é VAD neural: o resultado depende do ruído do ambiente.
+  bool get currentlySpeaking => _speechFrames >= 4 &&
+      (_frameCount - _lastSpeechFrame) <= 20;
+
   void addPcm(Uint8List bytes) {
     final pcm = ByteData.sublistView(bytes);
     for (var i = 0; i + 1 < pcm.lengthInBytes; i += 2) {

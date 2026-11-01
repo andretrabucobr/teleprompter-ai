@@ -1,0 +1,26 @@
+TELEPROMPTER AI v0.8.1 — DESTAQUE ÚNICO + COR #D1D93F
+
+Atualização sobre a v0.8 com a correção Dart anterior já aplicada.
+
+Envie os arquivos e pastas deste ZIP para a RAIZ do repositório GitHub:
+  lib/main.dart                                (substituir)
+  lib/screens/teleprompter_page.dart           (substituir)
+  lib/core/app_colors.dart                     (novo)
+  lib/core/last_spoken_word.dart               (novo)
+  test/last_spoken_word_test.dart              (novo)
+  pubspec.yaml                                 (substituir, versão 0.8.1+9)
+
+Não altere a pasta .github nem o workflow que está compilando.
+Execute novamente o GitHub Actions na opção streaming.
+
+Mudanças:
+- Botões, chips e controles usam a cor de marca #D1D93F.
+- Somente a última palavra confirmada pelo ASR recebe fundo #D1D93F.
+- Palavras futuras e anteriores não recebem cor diferente.
+- A antecipação continua movimentando o texto sem pintar as palavras futuras.
+- A faixa de referência na leitura também usa a cor de marca.
+
+Observação: o reconhecimento de voz ainda pode entregar confirmações com atraso;
+esta atualização altera o destaque e a cor, não reduz a latência do ASR.
+
+Validação: testes Dart adicionados; execução no Flutter/GitHub Actions pendente.

@@ -10,6 +10,8 @@ import 'package:share_plus/share_plus.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../core/script_matcher.dart';
+import '../core/app_colors.dart';
+import '../core/last_spoken_word.dart';
 import '../core/predictive_reading_cursor.dart';
 import '../core/screen_awake_policy.dart';
 import '../core/speech_alignment_tracker.dart';
@@ -310,6 +312,9 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     if (next == _anticipationWords) return;
     _readingCursor.setAnticipationWords(next);
     setState(() => _anticipationWords = next);
+    // A antecipação agora ajusta apenas o enquadramento do texto,
+    // nunca o conjunto de palavras destacadas.
+    _scrollToFocus();
     _broadcast();
   }
 
@@ -322,7 +327,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
 
   void _scrollToFocus() {
     final targetIndex = _scrollMode == ScrollMode.voice
-        ? _focusIndex : _activeIndex;
+        // A previsão mantém a leitura adiante, mas NÃO pinta as palavras futuras.
+        ? _readingCursor.focusEndIndex : _activeIndex;
     if (targetIndex < 0 || targetIndex >= _matcher.words.length) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || !_scroll.hasClients) return;
@@ -794,20 +800,22 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     for (var i = 0; i < _matcher.words.length; i++) {
       final word = _matcher.words[i];
       if (word.start > cursor) result.add(TextSpan(text: text.substring(cursor, word.start)));
-      // O verde indica PRÓXIMAS palavras a ler (e não a última
-      // transcrição atrasada). O reconhecimento confirmado fica discreto.
-      final ahead = _scrollMode == ScrollMode.voice &&
-          i >= _focusIndex && i <= _readingCursor.focusEndIndex;
+      // Só a última palavra reconhecida fica marcada. Nenhuma palavra
+      // predita nem outras palavras anteriores recebem cor diferente.
+      final lastSpoken = isLastSpokenWord(
+        wordIndex: i,
+        confirmedIndex: _activeIndex,
+        voiceMode: _scrollMode == ScrollMode.voice,
+      );
       result.add(TextSpan(
         text: text.substring(word.start, word.end),
-        style: ahead
+        style: lastSpoken
             ? const TextStyle(
-                color: Colors.black,
-                backgroundColor: Color(0xFF4AE4CA),
+                color: AppColors.onBrand,
+                backgroundColor: AppColors.brand,
+                fontWeight: FontWeight.w700,
               )
-            : i <= _activeIndex
-                ? const TextStyle(color: Colors.white60)
-                : null,
+            : null,
       ));
       cursor = word.end;
     }
@@ -842,7 +850,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
             IgnorePointer(
               child: Align(
                 alignment: const Alignment(0, -.25),
-                child: Container(height: 2, color: Colors.tealAccent.withValues(alpha: .45)),
+                child: Container(height: 2, color: AppColors.brand.withValues(alpha: .45)),
               ),
             ),
             if (_recording)
@@ -889,7 +897,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
           ],
           if (_scrollMode == ScrollMode.voice)
             Row(children: [
-              const Text('Antecipação', style: TextStyle(fontSize: 12)),
+              const Text('Rolagem à frente', style: TextStyle(fontSize: 12)),
               Expanded(child: Slider(
                 min: 2,
                 max: 10,

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'screens/teleprompter_page.dart';
+import 'core/app_colors.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,10 +18,15 @@ class TeleprompterApp extends StatelessWidget {
         theme: ThemeData(
           useMaterial3: true,
           colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF10C4A4),
+            seedColor: AppColors.brand,
             brightness: Brightness.dark,
+          ).copyWith(
+            primary: AppColors.brand,
+            onPrimary: AppColors.onBrand,
+            secondary: AppColors.brand,
+            onSecondary: AppColors.onBrand,
           ),
-          scaffoldBackgroundColor: const Color(0xFF111519),
+          scaffoldBackgroundColor: AppColors.background,
         ),
         home: const TeleprompterPage(),
       );

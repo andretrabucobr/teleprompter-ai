@@ -1,4 +1,4 @@
-name: Compilar Teleprompter AI (Android e iOS)
+name: Teleprompter AI 0.9 — Android e iOS
 
 # Execute manualmente para controlar uso de minutos e downloads grandes.
 on:
@@ -33,8 +33,10 @@ jobs:
           cache: true
       - name: Gerar arquivos Android/iOS
         run: flutter create --platforms=android --project-name=teleprompter_ai .
-      - name: Configurar permissões
-        run: python3 scripts/configurar_plataformas.py --platform android
+      - name: Configurar permissões e abertura
+        run: |
+          python3 scripts/configurar_plataformas.py --platform android
+          python3 scripts/configurar_splash.py --platform android
       - name: Instalar modelo de reconhecimento
         shell: bash
         run: |
@@ -102,7 +104,7 @@ jobs:
         run: flutter build apk --debug
       - uses: actions/upload-artifact@v4
         with:
-          name: teleprompter-ai-android-debug
+          name: teleprompter-ai-v09-android-debug
           path: build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
 
@@ -117,8 +119,10 @@ jobs:
           cache: true
       - name: Gerar arquivos Android/iOS
         run: flutter create --platforms=ios --project-name=teleprompter_ai .
-      - name: Configurar permissões
-        run: python3 scripts/configurar_plataformas.py --platform ios
+      - name: Configurar permissões e abertura
+        run: |
+          python3 scripts/configurar_plataformas.py --platform ios
+          python3 scripts/configurar_splash.py --platform ios
       - name: Instalar modelo de reconhecimento
         shell: bash
         run: |
@@ -141,6 +145,6 @@ jobs:
         run: cd build/ios/iphoneos && zip -qry ../../../teleprompter-ai-ios-sem-assinatura.zip Runner.app
       - uses: actions/upload-artifact@v4
         with:
-          name: teleprompter-ai-ios-unsigned
+          name: teleprompter-ai-v09-ios-unsigned
           path: teleprompter-ai-ios-sem-assinatura.zip
           if-no-files-found: error

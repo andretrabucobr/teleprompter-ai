@@ -1,0 +1,17 @@
+# SDKs e arquivos derivados
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+.idea/
+*.iml
+**/.DS_Store
+
+# Modelos grandes: devem ser instalados localmente ou durante o CI
+assets/models/whisper/*.onnx
+assets/models/whisper/tokens.txt
+assets/models/whisper/installed-model.txt
+
+# Plataformas geradas por `flutter create`
+# android/ e ios/ PODEM ser versionadas após a primeira compilação.

@@ -1,20 +1,8 @@
-TELEPROMPTER AI v0.8.3 — PAUSA AUTOMÁTICA NO SILÊNCIO
+Ícone com margem aumentada em 25%.
 
-Atualize APENAS estes 3 arquivos no repositório GitHub, preservando os caminhos:
-  lib/screens/teleprompter_page.dart
-  lib/core/predictive_reading_cursor.dart
-  test/predictive_reading_cursor_test.dart
+Substitua no repositório:
+- scripts/icon_assets/ (toda a pasta)
+- assets/branding/app_icon_otst_black.png
 
-Sem alterações em .github/workflows/build-mobile.yml, no tema #D1D93F ou no modelo de reconhecimento.
-
-MODO VOZ: pausa automaticamente a rolagem após o detector PCM identificar silêncio (aprox. 0,4 s), incluindo interrupção da animação em andamento. Ao falar de novo, a rolagem prossegue da posição atual. Confirmações atrasadas do ASR não deslocam o texto durante a pausa.
-
-MODO VELOCIDADE: continua rolando na velocidade escolhida; não depende da voz.
-
-FALLBACK NATIVO: sem PCM, o aplicativo usa hipóteses parciais como aproximação; pode ter comportamento menos preciso.
-
-Testes incluídos (não executados neste ambiente):
-  flutter analyze --no-fatal-infos --no-fatal-warnings
-  flutter test
-
-Compile no GitHub Actions com a opção de streaming já usada anteriormente.
+NÃO precisa alterar o script nem o workflow.
+Depois rode o build novamente. O nome do app continua Oitosete FlowText.

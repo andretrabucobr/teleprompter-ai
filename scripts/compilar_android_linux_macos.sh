@@ -11,11 +11,12 @@ if [[ ! -f android/app/src/main/AndroidManifest.xml ]]; then
   flutter create --platforms=android --project-name=teleprompter_ai .
 fi
 python3 scripts/configurar_plataformas.py --platform android
+python3 scripts/configurar_splash.py --platform android
 python3 scripts/instalar_modelo.py --model "$MODEL"
 flutter pub get
 flutter analyze --no-fatal-infos --no-fatal-warnings
 flutter test
 flutter build apk --debug --target-platform android-arm64
 mkdir -p dist
-cp build/app/outputs/flutter-apk/app-debug.apk dist/TeleprompterAI-v0.4-debug-Android-arm64.apk
-echo "APK: $(pwd)/dist/TeleprompterAI-v0.4-debug-Android-arm64.apk"
+cp build/app/outputs/flutter-apk/app-debug.apk dist/OitoseteFlowText-v0.9.2-debug-Android-arm64.apk
+echo "APK: $(pwd)/dist/OitoseteFlowText-v0.9.2-debug-Android-arm64.apk"

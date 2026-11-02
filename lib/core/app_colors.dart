@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-/// Identidade visual central do Teleprompter AI.
+/// Identidade visual central do Oitosete FlowText.
 class AppColors {
   AppColors._();
 

@@ -5,7 +5,7 @@ import 'package:path_provider/path_provider.dart';
 /// Roteiro salvo em arquivo no diretório privado do app.
 /// Não é necessário criar conta ou enviar conteúdo para um servidor.
 class ScriptRepository {
-  static const sample = '''Bem-vindo ao Teleprompter AI!\n\n'''
+  static const sample = '''Bem-vindo ao Oitosete FlowText!\n\n'''
       '''Este texto pode acompanhar sua fala, ou avançar em velocidade fixa.\n\n'''
       '''Para gravar na câmera do aplicativo, selecione Câmera.\n\n'''
       '''Para controlar de outro celular, abra Controle remoto nos dois aparelhos.''';

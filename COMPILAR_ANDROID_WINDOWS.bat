@@ -2,7 +2,7 @@
 setlocal
 cd /d "%~dp0"
 echo ======================================================
-echo     TELEPROMPTER AI - COMPILACAO ANDROID
+echo     OITOSETE FLOWTEXT - COMPILACAO ANDROID
 echo ======================================================
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\compilar_android_windows.ps1" %*
 if errorlevel 1 (

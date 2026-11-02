@@ -14,6 +14,7 @@ if [[ ! -f ios/Runner/Info.plist ]]; then
   flutter create --platforms=ios --project-name=teleprompter_ai .
 fi
 python3 scripts/configurar_plataformas.py --platform ios
+python3 scripts/configurar_splash.py --platform ios
 python3 scripts/instalar_modelo.py --model "$MODEL"
 flutter pub get
 flutter analyze --no-fatal-infos --no-fatal-warnings

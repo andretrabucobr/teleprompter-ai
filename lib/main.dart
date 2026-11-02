@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'screens/teleprompter_page.dart';
+import 'screens/startup_splash_page.dart';
 import 'core/app_colors.dart';
 
 void main() {
@@ -13,7 +13,7 @@ class TeleprompterApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-        title: 'Teleprompter AI',
+        title: 'Oitosete FlowText',
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
           useMaterial3: true,
@@ -28,6 +28,6 @@ class TeleprompterApp extends StatelessWidget {
           ),
           scaffoldBackgroundColor: AppColors.background,
         ),
-        home: const TeleprompterPage(),
+        home: const StartupSplashPage(),
       );
 }

@@ -13,6 +13,18 @@ void main() {
     expect(tracker.accept('hoje vamos apresentar', isFinal: false), 4);
   });
 
+  test('palavra isolada longa e imediatamente seguinte confirma a pausa', () {
+    final tracker = SpeechAlignmentTracker(
+      ScriptMatcher('Trabalho dedicado melhora resultados com inteligência.'),
+    );
+    expect(tracker.accept('Trabalho', isFinal: false), 0);
+    expect(tracker.accept('Trabalho', isFinal: false), isNull);
+    expect(tracker.index, 0);
+    expect(tracker.accept('dedicado', isFinal: false), 1);
+    expect(tracker.accept('inteligência', isFinal: false), isNull);
+    expect(tracker.index, 1); // não salta até o fim
+  });
+
   test('hipóteses idênticas não provocam novos saltos', () {
     final tracker = SpeechAlignmentTracker(
       ScriptMatcher('Hoje vamos gravar um vídeo com texto antecipado.'),

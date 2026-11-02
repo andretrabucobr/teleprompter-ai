@@ -1,118 +1,16 @@
-# Teleprompter AI v0.8 — compilar streaming real
+# Oitosete FlowText v0.9.2 — compilação
 
-**No GitHub**, envie as pastas `lib`, `test`, `scripts`, `docs`, `assets`
-mais `pubspec.yaml` e `README.md` para a raiz do repositório, preservando
-caminhos. A pasta `.github` é oculta no upload web; em vez dela, edite
-`.github/workflows/build-mobile.yml` e cole o conteúdo do arquivo separado
-`WORKFLOW_TELEPROMPTER_V08_STREAMING.txt`.
+## Na nuvem, usando GitHub Actions
 
-Vá em Actions → Compilar Teleprompter AI → Run workflow:
-- Modelo: `streaming` (recomendado para teste) ou `base` (Whisper antigo)
-- Plataforma: `android`
+- Envie o **projeto inteiro** para a raiz do repositório. Verifique `scripts/`, `lib/`, `assets/`, `test/` e `pubspec.yaml`.
+- Confira especificamente `scripts/configurar_splash.py`, `scripts/configurar_plataformas.py` e a pasta `scripts/icon_assets/`.
+- O workflow nativo está em `.github/workflows/build-mobile.yml`. Se o upload ignorar a pasta oculta, copie `WORKFLOW_GITHUB_COPIAR.txt` para o arquivo de workflow pelo editor do GitHub.
+- Escolha `modelo=streaming`, `plataforma=android`, e execute **Oitosete FlowText 0.9.2 — Android e iOS**.
+- O workflow gera arquivos nativos temporários com `flutter create`, configura o nome instalado, o ícone e a abertura, instala o modelo, analisa o código, roda testes e tenta gerar o APK.
+- Após sucesso, baixe o APK na seção Artifacts. Para iPhone, o aplicativo fica sem assinatura Apple.
 
-O modelo Nemotron é baixado pela CI; o ZIP só contém o código. O APK pode ficar
-muito grande (~650 MB de modelo). iOS ainda exige assinatura e testes físicos.
+## No Mac (opcional)
 
----
+Use `bash scripts/compilar_android_linux_macos.sh base` para Android com Whisper Base ou `bash scripts/compilar_ios_macos.sh base` para iOS não assinado. É necessário ter os SDKs locais. Para o modelo streaming, use o workflow na nuvem, que inclui a instalação do modelo streaming e fallback.
 
-# Compilar o Teleprompter AI (Android e iOS)
-
-**Este ZIP contém código-fonte, não um APK pronto.** O aplicativo ainda não passou
-por uma compilação Flutter real nem por testes físicos. O objetivo dos scripts é
-executar a compilação no computador que já tem os SDKs necessários.
-
-## 1. Android no Windows 10/11
-
-Instale no computador (uma única vez):
-
-1. **Flutter SDK** no canal estável, Flutter >= 3.44 (recomendado 3.50+):
-   https://docs.flutter.dev/get-started/install
-   Adicione `flutter\bin` ao `PATH` e abra um novo terminal.
-2. **Android Studio**, incluindo Android SDK, Android SDK Platform Tools,
-   Android SDK Command-line Tools e JDK 17:
-   https://developer.android.com/studio
-3. **Python 3.10+**: https://www.python.org/downloads/windows/
-4. Conexão com a internet. O modelo de reconhecimento Whisper e os pacotes
-   Flutter/Gradle são baixados durante a compilação. Reserve espaço em disco
-   para as ferramentas e os modelos (vários gigabytes).
-
-Abra PowerShell, execute `flutter doctor -v` e resolva o que estiver pendente.
-Se necessário, execute `flutter doctor --android-licenses` e aceite as licenças.
-
-**Para compilar:** extraia o ZIP (não execute dentro dele), abra a pasta
-`teleprompter_ai_mvp` e dê dois cliques em **`COMPILAR_ANDROID_WINDOWS.bat`**.
-
-O script:
-
-- verifica Flutter, Java, Python e Android SDK;
-- gera a estrutura Android (quando ausente);
-- configura as permissões;
-- baixa/instala o Whisper Base multilíngue INT8;
-- executa `flutter pub get`, `flutter analyze` e `flutter test`;
-- tenta compilar um APK de teste **Android ARM64**.
-
-O APK, **apenas se todas as etapas terminarem sem erro**, ficará em:
-
-`dist/TeleprompterAI-v0.4-debug-Android-arm64.apk`
-
-É um APK de desenvolvimento. Não é uma versão publicada/assinada para a Play
-Store. Para usar o modelo mais leve, execute em PowerShell:
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\compilar_android_windows.ps1 -Modelo tiny
-```
-
-Se o modelo já tiver sido baixado, também pode ser passado um arquivo oficial
-`.tar.bz2` com `-ArquivoModelo 'C:\pasta\modelo.tar.bz2'`.
-
-**Problemas frequentes:**
-
-- `flutter não encontrado`: instale Flutter, adicione `flutter\bin` ao PATH e
-  reabra o terminal.
-- `Android SDK ausente`: configure SDK Manager no Android Studio e confira
-  `ANDROID_SDK_ROOT`/`ANDROID_HOME`.
-- `Licenças Android pendentes`: execute `flutter doctor --android-licenses`.
-- `HTTP 403`/`timeout` ao baixar Whisper: teste a internet ou use o pacote
-  oficial com `-ArquivoModelo`.
-- `flutter analyze` ou `flutter test` falhou: o compilador parará e mostrará
-  o motivo; envie o texto do erro para corrigirmos o código.
-- `Gradle` falhou: confira JDK 17, Android SDK e a mensagem exata; evite
-  apagar o cache inteiro sem identificar o erro.
-
-## 2. Android em Linux ou Mac
-
-Depois de instalar Flutter, Android SDK, JDK 17 e Python 3.10+:
-
-```bash
-cd teleprompter_ai_mvp
-bash scripts/compilar_android_linux_macos.sh base
-```
-
-O APK aparece no diretório `dist/` se a compilação for bem-sucedida.
-
-## 3. iOS no Mac com Xcode
-
-**Não é possível compilar um aplicativo iOS instalável a partir de Windows.**
-Em um Mac com Xcode, Flutter e Python, execute:
-
-```bash
-cd teleprompter_ai_mvp
-bash scripts/compilar_ios_macos.sh base
-```
-
-O script gera `build/ios/iphoneos/Runner.app` **sem assinatura**. Para instalar
-num iPhone físico, configure no Xcode o identificador do app, equipe Apple e
-assinatura/provisionamento. Não existe `.ipa` pronto ou instalável neste ZIP.
-
-## 4. Teste mínimo após instalar
-
-No celular principal, abra **Câmera integrada** e conceda as permissões.
-Teste primeiro o modo de rolagem por velocidade, depois **Voz**. Grave 20 a 30
-segundos, faça uma pausa e retome; confirme que o texto avança e se o arquivo
-exportado contém áudio sincronizado. Por fim, conecte o segundo aparelho na
-mesma rede Wi-Fi e teste o PIN/QR Code.
-
-**Limitações conhecidas:** o reconhecimento Whisper trabalha em janelas (não
-streaming neural de latência garantida); câmera e áudio ainda não foram
-validados em Android/iOS reais; o controle remoto usa `ws://` sem criptografia,
-somente para uma rede Wi-Fi confiável. Consultar `docs/TESTES_DISPOSITIVOS.md`.
+**Validação:** somente testes estáticos e de configuração nativa foram executados neste ambiente; a compilação Flutter real depende do CI ou dos SDKs locais.

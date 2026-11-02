@@ -42,6 +42,16 @@ void main() {
     expect(gate.hasNewSpeech, isTrue);
   });
 
+  test('sinal de fala ao vivo para o avanço antecipado no silêncio', () {
+    final gate = SpeechActivityGate();
+    gate.addPcm(syntheticPcm(0, 30));
+    expect(gate.currentlySpeaking, isFalse);
+    gate.addPcm(syntheticPcm(.025, 14));
+    expect(gate.currentlySpeaking, isTrue);
+    gate.addPcm(syntheticPcm(0, 24));
+    expect(gate.currentlySpeaking, isFalse);
+  });
+
   test('voz antiga expira durante pausa longa', () {
     final gate = SpeechActivityGate();
     gate.addPcm(syntheticPcm(.025, 30));

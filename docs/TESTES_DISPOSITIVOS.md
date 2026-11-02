@@ -1,10 +1,12 @@
-# Validação de reconhecimento e compilação — Teleprompter AI v0.4
+# Validação de reconhecimento e compilação — Oitosete FlowText v0.9.2
 
 Todos os cenários abaixo estão **pendentes de execução** até haver um build
 Android/iOS validado e dispositivos reais.
 
 | ID | Plataforma | Cenário | Resultado esperado | Estado |
 |---|---|---|---|---|
+| ID-01 | Android | Instalar APK e conferir nome e ícone | Oitosete FlowText; símbolo sobre fundo preto | Pendente |
+| ID-02 | iPhone | Instalar aplicativo assinado e conferir nome e ícone | Oitosete FlowText; símbolo sobre fundo preto | Pendente |
 | CI-01 | Android | Flutter analyze/test e build apk --debug | Saída verde e APK gerado | Pendente |
 | CI-02 | macOS/iOS | Flutter analyze/test e build ios --no-codesign | Runner.app gerado | Pendente |
 | ASR-01 | Ambos | 60s silêncio, voz pausada | Roteiro permanece parado | Pendente |
@@ -27,7 +29,7 @@ Android/iOS validado e dispositivos reais.
 
 ### Captura de métricas
 
-Para cada cenário, anotar: modelo do aparelho, OS, modelo ASR (base/tiny),
+Para cada cenário, anotar: modelo do aparelho, OS, modelo ASR (streaming/base/tiny/small),
 roteiro, duração, microfone, ruído, horário, CPU/memória se disponível, número
 de avanços indevidos, deslocamento do texto e percepção de atraso. Para WER,
 comparar a transcrição contra uma referência transcrita manualmente.

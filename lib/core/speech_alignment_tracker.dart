@@ -36,6 +36,17 @@ class SpeechAlignmentTracker {
     }
     _lastHypothesis = normalized;
     _lastWasFinal = isFinal;
+    // Se o streaming reconhece apenas UMA palavra, podemos acompanhar
+    // somente quando ela é EXATAMENTE a próxima do roteiro. Não procurar
+    // em outras regiões, evitando saltos e confusões com palavras parecidas.
+    final spoken = ScriptMatcher.tokenize(transcript);
+    if (spoken.length == 1 && spoken.single.normalized.length >= 4) {
+      final adjacent = _index + 1;
+      if (adjacent >= 0 && adjacent < matcher.words.length &&
+          matcher.words[adjacent].normalized == spoken.single.normalized) {
+        return _commit(adjacent);
+      }
+    }
     final match = matcher.align(transcript, _index, finalResult: isFinal);
     if (match == null || match.index <= _index) return null;
     final jump = _index < 0 ? match.index + 1 : match.index - _index;

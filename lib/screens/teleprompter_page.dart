@@ -12,8 +12,9 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../core/script_matcher.dart';
 import '../core/app_colors.dart';
 import '../core/last_spoken_word.dart';
-import '../core/predictive_reading_cursor.dart';
+import '../core/confirmed_word_cursor.dart';
 import '../core/screen_awake_policy.dart';
+import '../core/voice_scroll_gate.dart';
 import '../core/speech_alignment_tracker.dart';
 import '../services/remote_session.dart';
 import '../services/shared_audio_capture.dart';
@@ -58,14 +59,13 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   );
   ScriptMatcher _matcher = ScriptMatcher(ScriptRepository.sample);
   late SpeechAlignmentTracker _tracker = SpeechAlignmentTracker(_matcher);
-  late PredictiveReadingCursor _readingCursor = PredictiveReadingCursor(
+  late ConfirmedWordCursor _readingCursor = ConfirmedWordCursor(
     wordCount: _matcher.words.length,
   );
   RemoteHost? _host;
   CameraController? _camera;
   List<CameraDescription> _cameras = [];
   Timer? _ticker;
-  Timer? _nativeVoiceIdleTimer;
   Timer? _saveTimer;
   Timer? _fullScreenControlsTimer;
   Future<void> _wakeLockSequence = Future<void>.value();
@@ -73,7 +73,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   bool? _wakeLockRequested;
 
   PrompterMode _mode = PrompterMode.external;
-  ScrollMode _scrollMode = ScrollMode.speed;
+  ScrollMode _scrollMode = ScrollMode.voice;
   bool _editing = true;
   bool _fullScreen = false;
   bool _fullScreenControlsVisible = false;
@@ -91,11 +91,12 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   double _viewerWidth = 320;
   double _viewerHeight = 400;
   int _activeIndex = -1; // última palavra CONFIRMADA pelo reconhecimento
-  int _focusIndex = 0; // primeira palavra da faixa a LER (previsão)
-  int _anticipationWords = 5;
+  int _focusIndex = 0; // próxima palavra a ler, sem previsão temporal
+  int _highlightIndex = -1; // apenas a última palavra confirmada pelo ASR
+  final VoiceScrollGate _voiceScrollGate = VoiceScrollGate();
   bool _voiceIsSpeaking = false;
+  int _voiceScrollEpoch = 0;
   bool _pendingVoiceActivity = false;
-  bool _nativeSpeechFallback = false;
   String _voiceStatus = 'Inativo';
   String _lastRecognizedText = '';
   String? _cameraError;
@@ -120,11 +121,12 @@ class _TeleprompterPageState extends State<TeleprompterPage>
         setState(() {
           _matcher = ScriptMatcher(content);
           _tracker = SpeechAlignmentTracker(_matcher);
-          _readingCursor = PredictiveReadingCursor(
+          _readingCursor = ConfirmedWordCursor(
             wordCount: _matcher.words.length,
-            anticipationWords: _anticipationWords,
           );
-          _focusIndex = _readingCursor.focusIndex;
+          _activeIndex = -1;
+          _highlightIndex = -1;
+          _focusIndex = _readingCursor.nextIndex;
           if (savedVideos.isNotEmpty) _latestVideo = savedVideos.first;
         });
       }
@@ -136,12 +138,13 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   void _scriptChanged() {
     _matcher = ScriptMatcher(_script.text);
     _tracker = SpeechAlignmentTracker(_matcher);
-    _readingCursor = PredictiveReadingCursor(
+    _readingCursor = ConfirmedWordCursor(
       wordCount: _matcher.words.length,
-      anticipationWords: _anticipationWords,
     );
-    _focusIndex = _readingCursor.focusIndex;
+    _focusIndex = _readingCursor.nextIndex;
+    _highlightIndex = -1;
     _voiceIsSpeaking = false;
+    _voiceScrollGate.reset();
     _activeIndex = -1;
     _lastRecognizedText = '';
     _saveTimer?.cancel();
@@ -274,64 +277,59 @@ class _TeleprompterPageState extends State<TeleprompterPage>
         'fontSize': _fontSize,
         'activeIndex': _activeIndex,
         'readingIndex': _focusIndex,
-        'anticipationWords': _anticipationWords,
+        'anticipationWords': 0, // sem previsão: avança só na palavra confirmada
         'recording': _recording,
         'voiceListening': _capture.followingVoice || _speech.running,
       };
 
   void _onTranscript(String transcript, bool isFinal) {
     if (!_playing || _scrollMode != ScrollMode.voice || !mounted) return;
-    final trimmed = transcript.trim();
-    // Apenas o fallback nativo não fornece áudio PCM/VAD. Nesse caso,
-    // hipóteses parciais são um sinal aproximado de atividade de voz.
-    // Um resultado final tardio NÃO reativa a rolagem depois do silêncio.
-    if (_nativeSpeechFallback) {
-      if (!isFinal && trimmed.isNotEmpty) {
-        _onSpeechActivity(true);
-        _nativeVoiceIdleTimer?.cancel();
-        _nativeVoiceIdleTimer = Timer(
-          const Duration(milliseconds: 600),
-          () => _onSpeechActivity(false),
-        );
-      } else if (isFinal) {
-        _nativeVoiceIdleTimer?.cancel();
-        _onSpeechActivity(false);
+    final heard = transcript.trim();
+    if (heard.isEmpty) return;
+
+    // Streaming e Whisper entregam resultados em atraso. O gate decide
+    // ANTES do alinhamento: a transcrição não deve destravar a rolagem
+    // depois de um evento de silêncio do microfone.
+    final decision = _voiceScrollGate.decide(
+      hasActivityDetector: !_speech.running,
+    );
+    if (decision == VoiceScrollDecision.ignore) return;
+
+    final confirmed = _tracker.accept(heard, isFinal: isFinal);
+    final changed = confirmed != null && _readingCursor.confirm(confirmed);
+    setState(() {
+      _lastRecognizedText = heard.length > 100
+          ? heard.substring(heard.length - 100) : heard;
+      if (changed) {
+        _activeIndex = _readingCursor.confirmedIndex;
+        _focusIndex = _readingCursor.nextIndex;
+        _highlightIndex = _readingCursor.highlightedIndex;
       }
+    });
+
+    if (changed) {
+      _voiceScrollGate.onConfirmed(decision);
+      if (decision == VoiceScrollDecision.advance) {
+        _scrollToFocus();
+      }
+      // Uma única correção tardia atualiza o destaque da palavra efetivamente
+      // lida, mas NÃO altera a posição visual durante a pausa.
+      _broadcast();
     }
-    final position = _tracker.accept(transcript, isFinal: isFinal);
-    if (position != null && position > _activeIndex) {
-      _readingCursor.onConfirmed(
-        position, DateTime.now().millisecondsSinceEpoch);
-    }
-    final focus = _readingCursor.focusIndex;
-    final focusMoved = focus != _focusIndex;
-    if (trimmed.isNotEmpty || position != null || focusMoved) {
-      setState(() {
-        if (trimmed.isNotEmpty) {
-          _lastRecognizedText = trimmed.length > 100
-              ? trimmed.substring(trimmed.length - 100) : trimmed;
-        }
-        if (position != null) _activeIndex = position;
-        _focusIndex = focus;
-      });
-    }
-    if (focusMoved) _scrollToFocus();
-    if (position != null) _broadcast();
   }
 
   void _onSpeechActivity(bool active) {
     if (!mounted || _scrollMode != ScrollMode.voice) return;
-    // O microfone pode começar antes de _play() terminar a inicialização.
-    // Preserva o último estado para que a primeira fala não seja perdida.
+    if (!_playing && !_playPending) return;
+    _voiceScrollGate.onSpeechActivity(active);
     if (!_playing) {
-      if (_playPending) _pendingVoiceActivity = active;
+      _pendingVoiceActivity = active;
       return;
     }
-    _readingCursor.onSpeechActivity(
-        active, DateTime.now().millisecondsSinceEpoch);
     if (!active) {
-      // Interrompe até uma animação de 180 ms que ainda esteja em andamento.
-      // Resultados atrasados do ASR apenas mudam o destaque da palavra lida.
+      // Invalida callbacks de layout agendados antes do silêncio e cancela
+      // a animação em andamento, para que nenhum frame posterior avance.
+      _voiceScrollEpoch++;
       _freezeAutomaticScroll();
     }
     if (_voiceIsSpeaking != active) {
@@ -340,20 +338,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   }
 
   void _freezeAutomaticScroll() {
-    if (_scroll.hasClients) {
-      _scroll.jumpTo(_scroll.offset); // cancela animateTo pendente
-    }
-  }
-
-  void _setAnticipationWords(int value) {
-    final next = value.clamp(2, 10).toInt();
-    if (next == _anticipationWords) return;
-    _readingCursor.setAnticipationWords(next);
-    setState(() => _anticipationWords = next);
-    // A antecipação agora ajusta apenas o enquadramento do texto,
-    // nunca o conjunto de palavras destacadas.
-    _scrollToFocus(force: true);
-    _broadcast();
+    if (_scroll.hasClients) _scroll.jumpTo(_scroll.offset);
   }
 
   TextStyle _readingStyle() => TextStyle(
@@ -364,17 +349,22 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       );
 
   void _scrollToFocus({bool force = false}) {
-    // A previsão não pode rolar durante o silêncio. O parâmetro force
-    // fica reservado a ações explícitas: busca, tela cheia, ajuste de fonte.
-    if (!force && _scrollMode == ScrollMode.voice && !_voiceIsSpeaking) return;
+    // No modo Voz, o detector de silêncio bloqueia qualquer reposicionamento
+    // espontâneo, mesmo se já houver uma animação agendada para este frame.
+    bool blockedBySilence() => !force && _playing &&
+        _scrollMode == ScrollMode.voice && !_speech.running &&
+        !_voiceScrollGate.isSpeaking;
+    if (blockedBySilence()) return;
+    final capturedEpoch = _voiceScrollEpoch;
+    // Fixar a última palavra lida no terço superior, mantendo as próximas
+    // linhas visíveis. Sem confirmação do ASR não há chamada automática.
     final targetIndex = _scrollMode == ScrollMode.voice
-        // A previsão mantém a leitura adiante, mas NÃO pinta as palavras futuras.
-        ? _readingCursor.focusEndIndex : _activeIndex;
+        ? (_activeIndex >= 0 ? _activeIndex : 0)
+        : _activeIndex;
     if (targetIndex < 0 || targetIndex >= _matcher.words.length) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_scroll.hasClients) return;
-      // Evita que callbacks já agendados reativem uma animação após pausa.
-      if (!force && _scrollMode == ScrollMode.voice && !_voiceIsSpeaking) return;
+      if (!mounted || !_scroll.hasClients || blockedBySilence() ||
+          capturedEpoch != _voiceScrollEpoch) return;
       final word = _matcher.words[targetIndex];
       final painter = TextPainter(
         text: TextSpan(text: _script.text, style: _readingStyle()),
@@ -391,14 +381,11 @@ class _TeleprompterPageState extends State<TeleprompterPage>
         final topPadding = _viewerHeight * .3;
         final destination = (boxes.first.top + topPadding - _viewerHeight * .36)
             .clamp(0.0, _scroll.position.maxScrollExtent).toDouble();
-        // Evita reiniciar animação quando palavras seguintes estão
-        // na mesma linha e a rolagem já está no ponto correto.
         if ((_scroll.offset - destination).abs() < 1.5) return;
-        _scroll.animateTo(
-          destination,
-          duration: const Duration(milliseconds: 180),
-          curve: Curves.easeOutCubic,
-        );
+        // A animação curta é apenas uma resposta ao ASR, não um avanço livre.
+        _scroll.animateTo(destination,
+            duration: const Duration(milliseconds: 120),
+            curve: Curves.easeOutCubic);
       } finally {
         painter.dispose();
       }
@@ -406,14 +393,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   }
 
   void _tick(Timer _) {
-    if (!_playing || !_scroll.hasClients) return;
-    if (_scrollMode == ScrollMode.voice) {
-      final next = _readingCursor.tick(DateTime.now().millisecondsSinceEpoch);
-      if (next >= 0 && next != _focusIndex && mounted) {
-        setState(() => _focusIndex = next);
-        _scrollToFocus();
-      }
-      return;
+    if (!_playing || !_scroll.hasClients || _scrollMode == ScrollMode.voice) {
+      return; // o modo Voz NUNCA avança pelo relógio nem pelo VAD
     }
     final end = _scroll.position.maxScrollExtent;
     final next = math.min(end, _scroll.offset + _speed / 30);
@@ -429,10 +410,9 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     if (_playPending) return;
     // Entrar na tela cheia ANTES de carregar o Whisper (pode ser demorado).
     _enterFullScreen();
+    _voiceScrollGate.reset();
     _playPending = true;
     _pendingVoiceActivity = false;
-    _nativeSpeechFallback = false;
-    _nativeVoiceIdleTimer?.cancel();
     if (mounted) setState(() {});
     final generation = ++_playGeneration;
     try {
@@ -457,7 +437,6 @@ class _TeleprompterPageState extends State<TeleprompterPage>
             if (!ready) {
               throw StateError('ASR offline e nativo indisponíveis: $offlineError');
             }
-            _nativeSpeechFallback = true;
           }
         }
         if (generation != _playGeneration) {
@@ -471,17 +450,14 @@ class _TeleprompterPageState extends State<TeleprompterPage>
           _editing = false;
           _playing = true;
           if (_scrollMode == ScrollMode.voice) {
-            _readingCursor.onSpeechActivity(
-              _pendingVoiceActivity, DateTime.now().millisecondsSinceEpoch);
             _voiceIsSpeaking = _pendingVoiceActivity;
-            _focusIndex = _readingCursor.focusIndex;
+            _focusIndex = _readingCursor.nextIndex;
           }
         });
         _ticker?.cancel();
-        _ticker = Timer.periodic(
-          Duration(milliseconds: _scrollMode == ScrollMode.voice ? 120 : 33),
-          _tick,
-        );
+        if (_scrollMode == ScrollMode.speed) {
+          _ticker = Timer.periodic(const Duration(milliseconds: 33), _tick);
+        }
         if (_fullScreenControlsVisible) _autoHideFullScreenControls();
       }
       _broadcast();
@@ -503,12 +479,10 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     if (_recordingBusy && !_recording) return;
     ++_playGeneration;
     _ticker?.cancel();
-    _nativeVoiceIdleTimer?.cancel();
-    _nativeSpeechFallback = false;
     _pendingVoiceActivity = false;
+    _voiceScrollGate.reset();
+    _voiceScrollEpoch++;
     _freezeAutomaticScroll();
-    _readingCursor.onSpeechActivity(false,
-        DateTime.now().millisecondsSinceEpoch);
     _voiceIsSpeaking = false;
     if (_speech.running) await _speech.stop();
     // Ao pausar a leitura durante um vídeo, o microfone segue gravando.
@@ -536,7 +510,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     if (mounted) {
       setState(() {
         _activeIndex = -1;
-        _focusIndex = _readingCursor.focusIndex;
+        _highlightIndex = -1;
+        _focusIndex = _readingCursor.nextIndex;
       });
     }
     _broadcast();
@@ -544,23 +519,17 @@ class _TeleprompterPageState extends State<TeleprompterPage>
 
   void _seek(int delta) {
     if (_matcher.words.isEmpty) return;
-    // Os botões de avanço/volta partem do texto que a pessoa está vendo,
-    // não da última transcrição que pode ter chegado com atraso.
-    final current = _scrollMode == ScrollMode.voice
-        ? _focusIndex : _activeIndex;
-    final next = (current + delta)
+    final next = (_focusIndex + delta)
         .clamp(0, _matcher.words.length - 1).toInt();
-    final confirmed = _scrollMode == ScrollMode.voice ? next - 1 : next;
-    final wasSpeaking = _voiceIsSpeaking && _playing;
-    _tracker.seek(confirmed);
-    _readingCursor.seek(confirmed);
-    if (wasSpeaking) {
-      _readingCursor.onSpeechActivity(
-          true, DateTime.now().millisecondsSinceEpoch);
-    }
+    // A navegação altera a âncora, mas não deve pintar como "lida" uma
+    // palavra que a pessoa selecionou sem falar.
+    final anchor = _scrollMode == ScrollMode.voice ? next - 1 : next;
+    _tracker.seek(anchor);
+    _readingCursor.seek(anchor);
     setState(() {
-      _activeIndex = confirmed;
-      _focusIndex = _readingCursor.focusIndex;
+      _activeIndex = anchor;
+      _focusIndex = _readingCursor.nextIndex;
+      _highlightIndex = -1;
     });
     _scrollToFocus(force: true);
     _broadcast();
@@ -571,13 +540,13 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       _notice('Finalize a gravação antes de trocar o modo de leitura.');
       return;
     }
+    if (_scrollMode == mode) return;
     await _pause();
     if (!mounted) return;
     setState(() => _scrollMode = mode);
     _broadcast();
-    // Selecionar "Voz" equivale a "Iniciar por voz": ativa o microfone e
-    // exibe imediatamente o roteiro em tela cheia.
-    if (mode == ScrollMode.voice) await _togglePlayback();
+    // Selecionar Voz não inicia o microfone sem o usuário pedir.
+    // Use Iniciar por voz para entrar em tela cheia e começar a leitura.
   }
 
   Future<void> _changeMode(PrompterMode mode) async {
@@ -737,8 +706,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
         ShareParams(
           files: [XFile(_latestVideo!), if (_latestAudio != null) XFile(_latestAudio!)],
           text: _latestAudio == null
-              ? 'Gravação Teleprompter AI'
-              : 'Gravação Teleprompter AI (vídeo e áudio separados)',
+              ? 'Gravação Oitosete FlowText'
+              : 'Gravação Oitosete FlowText (vídeo e áudio separados)',
         ),
       );
     } catch (e) {
@@ -858,7 +827,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       // predita nem outras palavras anteriores recebem cor diferente.
       final lastSpoken = isLastSpokenWord(
         wordIndex: i,
-        confirmedIndex: _activeIndex,
+        confirmedIndex: _highlightIndex,
         voiceMode: _scrollMode == ScrollMode.voice,
       );
       result.add(TextSpan(
@@ -894,6 +863,11 @@ class _TeleprompterPageState extends State<TeleprompterPage>
               flipX: _mirror,
               child: SingleChildScrollView(
                 controller: _scroll,
+                // Evita flings automáticos após o toque durante a leitura
+                // por voz; avanço manual permanece nos controles remotos.
+                physics: _playing && _scrollMode == ScrollMode.voice
+                    ? const NeverScrollableScrollPhysics()
+                    : null,
                 padding: EdgeInsets.fromLTRB(24, _viewerHeight * .3, 24, _viewerHeight * .75),
                 child: Text.rich(
                   TextSpan(style: _readingStyle(), children: _styledText()),
@@ -941,8 +915,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
           if (_scrollMode == ScrollMode.voice) ...[
             if (_playing)
               Text(_voiceIsSpeaking
-                  ? 'Acompanhando sua fala'
-                  : 'Rolagem parada — aguardando sua voz',
+                  ? 'Ouvindo: avanço somente após palavra confirmada'
+                  : 'Texto parado na última palavra lida',
                   style: Theme.of(context).textTheme.labelSmall),
             Text(_mode == PrompterMode.camera
                     ? 'Voz streaming pt-BR (fallback Whisper): $_voiceStatus'
@@ -955,18 +929,11 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                 style: Theme.of(context).textTheme.labelSmall),
           ],
           if (_scrollMode == ScrollMode.voice)
-            Row(children: [
-              const Text('Rolagem à frente', style: TextStyle(fontSize: 12)),
-              Expanded(child: Slider(
-                min: 2,
-                max: 10,
-                divisions: 8,
-                value: _anticipationWords.toDouble(),
-                onChanged: (value) => _setAnticipationWords(value.round()),
-              )),
-              Text('$_anticipationWords palavras',
-                  style: const TextStyle(fontSize: 12)),
-            ]),
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 4),
+              child: Text('Pausa automática: última palavra reconhecida.',
+                style: TextStyle(fontSize: 12)),
+            ),
           Row(children: [
             const Text('A'),
             Expanded(child: Slider(
@@ -1053,34 +1020,15 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                 ),
               ),
             ),
-          if (_scrollMode == ScrollMode.voice)
+          if (_scrollMode == ScrollMode.voice && _highlightIndex >= 0)
             Positioned(
-              bottom: 92,
-              left: 12,
-              right: 12,
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: .85),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Row(children: [
-                  const Padding(
-                    padding: EdgeInsets.only(left: 12),
-                    child: Text('À frente', style: TextStyle(fontSize: 12)),
-                  ),
-                  Expanded(child: Slider(
-                    min: 2,
-                    max: 10,
-                    divisions: 8,
-                    value: _anticipationWords.toDouble(),
-                    onChanged: (value) => _setAnticipationWords(value.round()),
-                  )),
-                  Padding(
-                    padding: const EdgeInsets.only(right: 12),
-                    child: Text('$_anticipationWords palavras',
-                        style: const TextStyle(fontSize: 12)),
-                  ),
-                ]),
+              bottom: 96,
+              left: 16,
+              right: 16,
+              child: IgnorePointer(
+                child: Text('Destaque: última palavra lida • pausa por palavra',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 11, color: Colors.white70)),
               ),
             ),
           Positioned(
@@ -1178,7 +1126,6 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     _recordingBusy = false;
     _syncScreenAwake();
     _ticker?.cancel();
-    _nativeVoiceIdleTimer?.cancel();
     _saveTimer?.cancel();
     _fullScreenControlsTimer?.cancel();
     unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge)
@@ -1200,7 +1147,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
         },
         child: Scaffold(
           appBar: _fullScreen ? null : AppBar(
-            title: const Text('Teleprompter AI'),
+            title: const Text('Oitosete FlowText'),
             actions: [
               if (_remoteConnected)
                 const Padding(padding: EdgeInsets.symmetric(horizontal: 4),
@@ -1286,12 +1233,43 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                   ),
                   if (_editing)
                     Padding(
-                      padding: const EdgeInsets.all(14),
-                      child: FilledButton.icon(
-                        onPressed: () => _enterFullScreen(showControls: true),
-                        icon: const Icon(Icons.fullscreen),
-                        label: const Text('Abrir em tela cheia'),
-                      ),
+                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 14),
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        const Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text('Como deseja acompanhar o roteiro?',
+                            style: TextStyle(fontWeight: FontWeight.w600)),
+                        ),
+                        const SizedBox(height: 8),
+                        SegmentedButton<ScrollMode>(
+                          segments: const [
+                            ButtonSegment(value: ScrollMode.voice,
+                              label: Text('Usar voz'), icon: Icon(Icons.mic)),
+                            ButtonSegment(value: ScrollMode.speed,
+                              label: Text('Velocidade'), icon: Icon(Icons.speed)),
+                          ],
+                          selected: {_scrollMode},
+                          onSelectionChanged: (value) =>
+                              _changeScrollMode(value.first),
+                        ),
+                        const SizedBox(height: 10),
+                        Row(children: [
+                          Expanded(
+                            child: FilledButton.icon(
+                              onPressed: _playPending ? null : _togglePlayback,
+                              icon: const Icon(Icons.play_arrow),
+                              label: Text(_scrollMode == ScrollMode.voice
+                                  ? 'Iniciar por voz' : 'Iniciar leitura'),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          IconButton.outlined(
+                            tooltip: 'Abrir leitor em tela cheia',
+                            icon: const Icon(Icons.fullscreen),
+                            onPressed: () => _enterFullScreen(showControls: true),
+                          ),
+                        ]),
+                      ]),
                     )
                   else
                     _readerControls(),

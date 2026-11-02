@@ -22,7 +22,7 @@ function Executar([string]$Programa, [string[]]$Argumentos) {
 }
 
 try {
-    Write-Host 'Teleprompter AI - compilacao Android local' -ForegroundColor Green
+    Write-Host 'Oitosete FlowText - compilacao Android local' -ForegroundColor Green
     Exigir-Comando 'flutter' 'Instale o Flutter SDK e adicione flutter\bin ao PATH: https://docs.flutter.dev/get-started/install'
     Exigir-Comando 'java' 'Instale o JDK 17 ou use o JDK do Android Studio: https://developer.android.com/studio'
     $python = if (Get-Command 'py' -ErrorAction SilentlyContinue) { 'py' } else { 'python' }
@@ -44,6 +44,7 @@ try {
         Executar 'flutter' @('create', '--platforms=android', '--project-name=teleprompter_ai', '.')
     }
     Executar $python ($pyPrefix + @('scripts/configurar_plataformas.py', '--platform', 'android'))
+    Executar $python ($pyPrefix + @('scripts/configurar_splash.py', '--platform', 'android'))
 
     $argsModelo = @('scripts/instalar_modelo.py', '--model', $Modelo)
     if ($ArquivoModelo) {
@@ -63,7 +64,7 @@ try {
         throw "Flutter nao gerou o APK esperado: $origem"
     }
     New-Item -ItemType Directory -Force -Path (Join-Path $raiz 'dist') | Out-Null
-    $destino = Join-Path $raiz 'dist\TeleprompterAI-v0.4-debug-Android-arm64.apk'
+    $destino = Join-Path $raiz 'dist\OitoseteFlowText-v0.9.2-debug-Android-arm64.apk'
     Copy-Item -Path $origem -Destination $destino -Force
     Write-Host "`nSUCESSO! APK criado: $destino" -ForegroundColor Green
     Write-Host 'APK de teste; nao esta assinado para publicacao na Play Store.'

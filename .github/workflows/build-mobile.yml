@@ -1,4 +1,4 @@
-name: Teleprompter AI 0.9 — Android e iOS
+name: Oitosete FlowText 0.9.2 — Android e iOS
 
 # Execute manualmente para controlar uso de minutos e downloads grandes.
 on:
@@ -31,9 +31,11 @@ jobs:
         with:
           channel: stable
           cache: true
+      - name: Verificar scripts de identidade e modelo
+        run: python3 -m unittest discover -s scripts/tests -v
       - name: Gerar arquivos Android/iOS
         run: flutter create --platforms=android --project-name=teleprompter_ai .
-      - name: Configurar permissões e abertura
+      - name: Configurar permissões, nome, ícone e abertura
         run: |
           python3 scripts/configurar_plataformas.py --platform android
           python3 scripts/configurar_splash.py --platform android
@@ -104,7 +106,7 @@ jobs:
         run: flutter build apk --debug
       - uses: actions/upload-artifact@v4
         with:
-          name: teleprompter-ai-v09-android-debug
+          name: oitosete-flowtext-v092-android-debug
           path: build/app/outputs/flutter-apk/app-debug.apk
           if-no-files-found: error
 
@@ -117,9 +119,11 @@ jobs:
         with:
           channel: stable
           cache: true
+      - name: Verificar scripts de identidade e modelo
+        run: python3 -m unittest discover -s scripts/tests -v
       - name: Gerar arquivos Android/iOS
         run: flutter create --platforms=ios --project-name=teleprompter_ai .
-      - name: Configurar permissões e abertura
+      - name: Configurar permissões, nome, ícone e abertura
         run: |
           python3 scripts/configurar_plataformas.py --platform ios
           python3 scripts/configurar_splash.py --platform ios
@@ -142,9 +146,9 @@ jobs:
       - name: Compilar iOS sem assinatura
         run: flutter build ios --release --no-codesign
       - name: Arquivar aplicativo iOS não assinado
-        run: cd build/ios/iphoneos && zip -qry ../../../teleprompter-ai-ios-sem-assinatura.zip Runner.app
+        run: cd build/ios/iphoneos && zip -qry ../../../oitosete-flowtext-ios-sem-assinatura.zip Runner.app
       - uses: actions/upload-artifact@v4
         with:
-          name: teleprompter-ai-v09-ios-unsigned
-          path: teleprompter-ai-ios-sem-assinatura.zip
+          name: oitosete-flowtext-v092-ios-unsigned
+          path: oitosete-flowtext-ios-sem-assinatura.zip
           if-no-files-found: error

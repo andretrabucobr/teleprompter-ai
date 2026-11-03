@@ -18,5 +18,5 @@ flutter analyze --no-fatal-infos --no-fatal-warnings
 flutter test
 flutter build apk --debug --target-platform android-arm64
 mkdir -p dist
-cp build/app/outputs/flutter-apk/app-debug.apk dist/OitoseteFlowText-v0.9.2-debug-Android-arm64.apk
-echo "APK: $(pwd)/dist/OitoseteFlowText-v0.9.2-debug-Android-arm64.apk"
+cp build/app/outputs/flutter-apk/app-debug.apk dist/OitoseteFlowText-v0.9.4-debug-Android-arm64.apk
+echo "APK: $(pwd)/dist/OitoseteFlowText-v0.9.4-debug-Android-arm64.apk"

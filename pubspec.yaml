@@ -1,5 +1,5 @@
 name: teleprompter_ai
-version: 0.9.2+12
+version: 0.9.4+14
 description: Teleprompter com ASR streaming em pt-BR, gravacao e controle remoto LAN.
 publish_to: none
 

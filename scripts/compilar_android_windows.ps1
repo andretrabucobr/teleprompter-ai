@@ -64,7 +64,7 @@ try {
         throw "Flutter nao gerou o APK esperado: $origem"
     }
     New-Item -ItemType Directory -Force -Path (Join-Path $raiz 'dist') | Out-Null
-    $destino = Join-Path $raiz 'dist\OitoseteFlowText-v0.9.2-debug-Android-arm64.apk'
+    $destino = Join-Path $raiz 'dist\OitoseteFlowText-v0.9.4-debug-Android-arm64.apk'
     Copy-Item -Path $origem -Destination $destino -Force
     Write-Host "`nSUCESSO! APK criado: $destino" -ForegroundColor Green
     Write-Host 'APK de teste; nao esta assinado para publicacao na Play Store.'

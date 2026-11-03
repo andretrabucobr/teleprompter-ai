@@ -1,16 +1,14 @@
-# Oitosete FlowText v0.9.2 — compilação
+# Compilação online otimizada — Oitosete FlowText 0.9.4
 
-## Na nuvem, usando GitHub Actions
+Use o **GitHub Actions** para gerar um APK Android em release, ARM64. O fluxo foi atualizado para selecionar o reconhecimento e produzir um relatório real do tamanho do arquivo.
 
-- Envie o **projeto inteiro** para a raiz do repositório. Verifique `scripts/`, `lib/`, `assets/`, `test/` e `pubspec.yaml`.
-- Confira especificamente `scripts/configurar_splash.py`, `scripts/configurar_plataformas.py` e a pasta `scripts/icon_assets/`.
-- O workflow nativo está em `.github/workflows/build-mobile.yml`. Se o upload ignorar a pasta oculta, copie `WORKFLOW_GITHUB_COPIAR.txt` para o arquivo de workflow pelo editor do GitHub.
-- Escolha `modelo=streaming`, `plataforma=android`, e execute **Oitosete FlowText 0.9.2 — Android e iOS**.
-- O workflow gera arquivos nativos temporários com `flutter create`, configura o nome instalado, o ícone e a abertura, instala o modelo, analisa o código, roda testes e tenta gerar o APK.
-- Após sucesso, baixe o APK na seção Artifacts. Para iPhone, o aplicativo fica sem assinatura Apple.
+- Recomendação para manter a funcionalidade do streaming com fallback: `modelo=streaming`, `tipo_apk=release_arm64`.
+- Para retirar apenas o Whisper Tiny adicional: `modelo=streaming_leve` (sem fallback se o Nemotron falhar).
+- Para reduzir muito o modelo incluído: `modelo=base` (Whisper, transcrição em janelas; reconhecimento não tão responsivo).
+- Para um APK de diagnóstico: `tipo_apk=debug` (maior).
 
-## No Mac (opcional)
+O build utiliza o script de compatibilidade Media3 já validado em versões anteriores. A compilação release ainda precisa de validação em execução real.
 
-Use `bash scripts/compilar_android_linux_macos.sh base` para Android com Whisper Base ou `bash scripts/compilar_ios_macos.sh base` para iOS não assinado. É necessário ter os SDKs locais. Para o modelo streaming, use o workflow na nuvem, que inclui a instalação do modelo streaming e fallback.
+O relatório `relatorio_tamanho_build.md` lista em MiB quanto o arquivo APK ocupa e suas categorias internas. O modelo incluído ainda é copiado para armazenamento local na primeira preparação; o relatório não mede espaço total no dispositivo.
 
-**Validação:** somente testes estáticos e de configuração nativa foram executados neste ambiente; a compilação Flutter real depende do CI ou dos SDKs locais.
+**Build no Mac/Windows:** os scripts locais legados permanecem para testes de desenvolvimento com Flutter instalado. Para este perfil otimizado, use o GitHub Actions, que inclui a correção Media3 e o relatório.

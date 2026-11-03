@@ -1,4 +1,4 @@
-name: Oitosete FlowText 0.9.2 — Android e iOS
+name: Oitosete FlowText 0.9.4 — Android e iOS
 
 # Execute manualmente para controlar uso de minutos e downloads grandes.
 on:
@@ -9,7 +9,13 @@ on:
         required: true
         default: 'streaming'
         type: choice
-        options: [streaming, base, tiny, small]
+        options: [streaming, streaming_leve, base, tiny, small]
+      tipo_apk:
+        description: 'APK Android: menor para celulares modernos (release_arm64), todas ABIs ou debug'
+        required: true
+        default: 'release_arm64'
+        type: choice
+        options: [release_arm64, release_todas, debug]
       plataforma:
         description: 'Compilar Android, iPhone ou ambos (iPhone sem assinatura)'
         required: true
@@ -42,13 +48,21 @@ jobs:
       - name: Instalar modelo de reconhecimento
         shell: bash
         run: |
-          if [ '${{ inputs.modelo }}' = 'streaming' ]; then
-            python3 scripts/instalar_streaming.py
-            # Whisper Tiny: alternativa caso o streaming não inicialize.
-            python3 scripts/instalar_modelo.py --model tiny
-          else
-            python3 scripts/instalar_modelo.py --model '${{ inputs.modelo }}'
-          fi
+          case '${{ inputs.modelo }}' in
+            streaming)
+              # Comportamento anterior: streaming e Whisper Tiny de segurança.
+              python3 scripts/instalar_streaming.py
+              python3 scripts/instalar_modelo.py --model tiny
+              ;;
+            streaming_leve)
+              # Menor APK: mantém Nemotron; SEM fallback Whisper offline.
+              python3 scripts/instalar_streaming.py
+              ;;
+            tiny|base|small)
+              python3 scripts/instalar_modelo.py --model '${{ inputs.modelo }}'
+              ;;
+            *) exit 2 ;;
+          esac
       - name: Dependências e análise
         run: |
           flutter pub get
@@ -102,12 +116,36 @@ jobs:
                       'A correção foi interrompida para evitar alterações indevidas.'
                   )
           PYTHON
-      - name: Compilar APK de teste
-        run: flutter build apk --debug
+      - name: Compilar APK Android no modo solicitado
+        shell: bash
+        run: |
+          case '${{ inputs.tipo_apk }}' in
+            release_arm64)
+              # Padrão recomendado: um único APK arm64, sem recursos de debug.
+              flutter build apk --release --target-platform android-arm64 --split-per-abi \
+                --split-debug-info=build/simbolos/android
+              ;;
+            release_todas)
+              # APK separado por arquitetura para dispositivos mais antigos.
+              flutter build apk --release --split-per-abi \
+                --split-debug-info=build/simbolos/android
+              ;;
+            debug)
+              # Apenas para investigação de falhas; arquivo muito maior.
+              flutter build apk --debug
+              ;;
+            *) exit 2 ;;
+          esac
+      - name: Medir tamanho real do APK e componentes
+        run: python3 scripts/relatorio_tamanho.py
       - uses: actions/upload-artifact@v4
         with:
-          name: oitosete-flowtext-v092-android-debug
-          path: build/app/outputs/flutter-apk/app-debug.apk
+          name: oitosete-flowtext-v094-${{ inputs.modelo }}-${{ inputs.tipo_apk }}
+          path: |
+            build/app/outputs/flutter-apk/*.apk
+            relatorio_tamanho_build.md
+            build/simbolos/android/**
+          retention-days: 7
           if-no-files-found: error
 
   ios:
@@ -130,13 +168,21 @@ jobs:
       - name: Instalar modelo de reconhecimento
         shell: bash
         run: |
-          if [ '${{ inputs.modelo }}' = 'streaming' ]; then
-            python3 scripts/instalar_streaming.py
-            # Whisper Tiny: alternativa caso o streaming não inicialize.
-            python3 scripts/instalar_modelo.py --model tiny
-          else
-            python3 scripts/instalar_modelo.py --model '${{ inputs.modelo }}'
-          fi
+          case '${{ inputs.modelo }}' in
+            streaming)
+              # Comportamento anterior: streaming e Whisper Tiny de segurança.
+              python3 scripts/instalar_streaming.py
+              python3 scripts/instalar_modelo.py --model tiny
+              ;;
+            streaming_leve)
+              # Menor APK: mantém Nemotron; SEM fallback Whisper offline.
+              python3 scripts/instalar_streaming.py
+              ;;
+            tiny|base|small)
+              python3 scripts/instalar_modelo.py --model '${{ inputs.modelo }}'
+              ;;
+            *) exit 2 ;;
+          esac
       - name: Dependências e análise
         run: |
           flutter pub get
@@ -145,10 +191,19 @@ jobs:
           flutter test
       - name: Compilar iOS sem assinatura
         run: flutter build ios --release --no-codesign
+      - name: Resumo do tamanho iOS (app não assinado)
+        shell: bash
+        run: |
+          du -sh build/ios/iphoneos/Runner.app | tee relatorio_tamanho_ios.txt
+          echo '## Tamanho iOS (app não assinado)' >> "$GITHUB_STEP_SUMMARY"
+          echo "$(cat relatorio_tamanho_ios.txt)" >> "$GITHUB_STEP_SUMMARY"
       - name: Arquivar aplicativo iOS não assinado
         run: cd build/ios/iphoneos && zip -qry ../../../oitosete-flowtext-ios-sem-assinatura.zip Runner.app
       - uses: actions/upload-artifact@v4
         with:
-          name: oitosete-flowtext-v092-ios-unsigned
-          path: oitosete-flowtext-ios-sem-assinatura.zip
+          name: oitosete-flowtext-v094-${{ inputs.modelo }}-ios-unsigned
+          path: |
+            oitosete-flowtext-ios-sem-assinatura.zip
+            relatorio_tamanho_ios.txt
+          retention-days: 7
           if-no-files-found: error

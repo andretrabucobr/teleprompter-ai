@@ -116,6 +116,37 @@ jobs:
                       'A correção foi interrompida para evitar alterações indevidas.'
                   )
           PYTHON
+      - name: Contornar falha interna do Lint no CameraX
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          from pathlib import Path
+
+          # O Lint do AGP falha no CommentDetector (JavaDocParser/removeLast).
+          # Desativa apenas os dois checks indicados pelo próprio log,
+          # somente no módulo de terceiros camera_android_camerax.
+          plugins = json.loads(Path('.flutter-plugins-dependencies').read_text(encoding='utf-8'))
+          matches = [p for p in plugins['plugins']['android']
+                     if p['name'] == 'camera_android_camerax']
+          if len(matches) != 1:
+              raise SystemExit('Esperado exatamente um plugin camera_android_camerax.')
+          android = Path(matches[0]['path']) / 'android'
+          candidates = [p for p in (android / 'build.gradle', android / 'build.gradle.kts')
+                        if p.is_file()]
+          if len(candidates) != 1:
+              raise SystemExit(f'Arquivo Gradle do CameraX inesperado: {android}')
+          gradle = candidates[0]
+          source = gradle.read_text(encoding='utf-8')
+          marker = '// FlowText: workaround CameraX CommentDetector'
+          if marker not in source:
+              if gradle.suffix == '.kts':
+                  config = 'android {\n    lint {\n        disable += setOf("EasterEgg", "StopShip")\n    }\n}\n'
+              else:
+                  config = 'android {\n    lint {\n        disable "EasterEgg", "StopShip"\n    }\n}\n'
+              gradle.write_text(source + '\n' + marker + '\n' + config, encoding='utf-8')
+          print(f'Workaround aplicado: {gradle}; demais verificações Lint preservadas.')
+          PYTHON
       - name: Compilar APK Android no modo solicitado
         shell: bash
         run: |

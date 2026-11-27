@@ -2,6 +2,8 @@ package __PACKAGE__
 
 import android.content.Context
 import android.net.wifi.WifiManager
+import android.os.Build
+import android.speech.SpeechRecognizer
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -17,6 +19,20 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "flowtext/local_voice")
+            .setMethodCallHandler { call, result ->
+                if (call.method == "available") {
+                    val available = try {
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                            SpeechRecognizer.isOnDeviceRecognitionAvailable(applicationContext)
+                    } catch (_: Exception) {
+                        false
+                    }
+                    result.success(available)
+                } else {
+                    result.notImplemented()
+                }
+            }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "flowtext/lan_name")
             .setMethodCallHandler { call, result ->
                 when (call.method) {

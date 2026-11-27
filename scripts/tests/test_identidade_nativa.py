@@ -61,6 +61,8 @@ class IdentidadeNativaTests(unittest.TestCase):
         self.assertEqual(gradle.read_text().count('org.jmdns:jmdns:3.5.10'), 1)
         self.assertIn('package com.example.teleprompter_ai', activity.read_text())
         self.assertIn('flowtext/lan_name', activity.read_text())
+        self.assertIn('flowtext/local_voice', activity.read_text())
+        self.assertIn('isOnDeviceRecognitionAvailable', activity.read_text())
         self.assertIn('CHANGE_WIFI_MULTICAST_STATE', first)
         self.assertTrue((main / 'res/mipmap-hdpi/ic_launcher.png').is_file())
         self.assertTrue((main / 'res/mipmap-anydpi-v26/ic_launcher.xml').is_file())

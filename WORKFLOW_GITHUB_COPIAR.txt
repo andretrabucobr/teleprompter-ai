@@ -1,4 +1,4 @@
-name: Oitosete FlowText 0.10.0 — Build 19
+name: Oitosete FlowText 0.10.0 — Build 20
 
 # Execute manualmente para controlar uso de minutos e downloads grandes.
 on:

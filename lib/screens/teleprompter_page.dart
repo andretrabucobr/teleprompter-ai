@@ -46,9 +46,13 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       if (mounted) setState(() => _voiceStatus = status);
     },
     onError: (message) {
-      if (mounted) {
-        setState(() => _voiceStatus = message);
-        _notice(message);
+      if (mounted) setState(() => _voiceStatus = message);
+    },
+    onUnavailable: () {
+      _nativeUnavailableThisSession = true;
+      if (mounted && _playing && !_playPending &&
+          _mode == PrompterMode.external && _scrollMode == ScrollMode.voice) {
+        unawaited(_recoverLocalVoice());
       }
     },
   );
@@ -84,7 +88,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
 
   PrompterMode _mode = PrompterMode.external;
   ScrollMode _scrollMode = ScrollMode.voice;
-  bool _preferNativeVoice = false;
+  bool _switchingVoiceEngine = false;
+  bool _nativeUnavailableThisSession = false;
   bool _editing = true;
   bool _fullScreen = false;
   bool _fullScreenControlsVisible = false;
@@ -549,18 +554,83 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     if (next >= end) _pause();
   }
 
+  Future<bool> _nativeLocalVoiceAvailable() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      return await const MethodChannel('flowtext/local_voice')
+          .invokeMethod<bool>('available') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool _sameVoiceSession(int generation) => mounted &&
+      generation == _playGeneration && _mode == PrompterMode.external &&
+      _scrollMode == ScrollMode.voice;
+
+  Future<void> _startAutomaticExternalVoice(int generation) async {
+    if (await _nativeLocalVoiceAvailable() && _sameVoiceSession(generation)) {
+      bool ready = false;
+      try {
+        ready = await _speech.start(onDevice: true);
+      } catch (_) {
+        // A liberação abaixo deve ocorrer antes da captura PCM.
+      }
+      if (ready && !_nativeUnavailableThisSession && _sameVoiceSession(generation)) {
+        return;
+      }
+      await _speech.stop();
+      if (!_sameVoiceSession(generation)) return;
+      _tracker.seek(_readingCursor.confirmedIndex);
+    }
+    if (!_sameVoiceSession(generation)) return;
+    await _capture.start(followVoice: true, saveAudio: false);
+    if (!_sameVoiceSession(generation)) await _capture.discard();
+  }
+
+  Future<void> _recoverLocalVoice() async {
+    if (_switchingVoiceEngine || !_playing || _recording) return;
+    _switchingVoiceEngine = true;
+    final generation = _playGeneration;
+    try {
+      if (mounted) setState(() => _voiceStatus = 'Reconectando reconhecimento de voz...');
+      await _speech.stop();
+      if (!_sameVoiceSession(generation) || !_playing) return;
+      _tracker.seek(_readingCursor.confirmedIndex);
+      _voiceScrollGate.reset();
+      _voiceScrollEpoch++;
+      _freezeAutomaticScroll();
+      _voiceIsSpeaking = false;
+      await _capture.start(followVoice: true, saveAudio: false);
+      if (!_sameVoiceSession(generation) || !_playing) {
+        await _capture.discard();
+        return;
+      }
+      _broadcast();
+    } catch (e) {
+      if (_sameVoiceSession(generation) && _playing) {
+        await _pause();
+        if (mounted) _notice('Não foi possível recuperar o reconhecimento de voz: $e');
+      }
+    } finally {
+      _switchingVoiceEngine = false;
+      if (mounted) setState(() {});
+    }
+  }
+
   Future<void> _play() async {
     if (_remoteSavingScript) throw StateError('Aguarde o salvamento do roteiro.');
     if (_playing) {
       _enterFullScreen();
       return;
     }
-    if (_playPending) return;
+    if (_playPending || _switchingVoiceEngine) return;
     // Entrar na tela cheia ANTES de carregar o Whisper (pode ser demorado).
     _enterFullScreen();
     _voiceScrollGate.reset();
     // Nova sessão de áudio: não confundir a primeira parcial com a fala antiga.
     _tracker.seek(_readingCursor.confirmedIndex);
+    _nativeUnavailableThisSession = false;
     _firstRawHypothesis = '';
     _firstMatchedWord = '';
     _firstRawMs = null;
@@ -579,27 +649,10 @@ class _TeleprompterPageState extends State<TeleprompterPage>
         if (_mode == PrompterMode.camera) {
           // Mesmo fluxo PCM usado para salvar a voz da gravação.
           await _capture.start(followVoice: true);
-        } else if (_preferNativeVoice) {
-          // Alternativa experimental para tablets com CPU mais lenta.
-          if (!await _speech.start(onDevice: true)) {
-            await _speech.stop();
-            throw StateError('Reconhecimento nativo local indisponível. Desative a opção nativa e tente novamente.');
-          }
         } else {
-          // No leitor externo, prioriza o mesmo ASR offline de gravação.
-          // Se o modelo não estiver instalado, usa API nativa como fallback.
-          try {
-            await _capture.start(followVoice: true, saveAudio: false);
-          } catch (offlineError) {
-            if (mounted) {
-              setState(() => _voiceStatus =
-                  'Modelo local não disponível; usando reconhecimento nativo.');
-            }
-            final ready = await _speech.start();
-            if (!ready) {
-              throw StateError('ASR offline e nativo indisponíveis: $offlineError');
-            }
-          }
+          // Um único motor por vez. O leitor externo tenta o serviço local
+          // do Android; em caso de indisponibilidade usa o ASR embarcado.
+          await _startAutomaticExternalVoice(generation);
         }
         if (generation != _playGeneration) {
           if (_capture.running && !_recording) await _capture.discard();
@@ -637,6 +690,10 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       _syncScreenAwake();
       _broadcast();
       if (mounted) setState(() {});
+      if (_nativeUnavailableThisSession && _sameVoiceSession(generation) &&
+          _playing && !_capture.running && !_speech.running) {
+        unawaited(_recoverLocalVoice());
+      }
     }
   }
 
@@ -653,7 +710,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     _voiceScrollEpoch++;
     _freezeAutomaticScroll();
     _voiceIsSpeaking = false;
-    if (_speech.running) await _speech.stop();
+    if (_speech.running || _switchingVoiceEngine) await _speech.stop();
     // Ao pausar a leitura durante um vídeo, o microfone segue gravando.
     if (_recording && _capture.running) {
       _capture.pauseFollowing(); // O WAV continua, mesmo com o texto pausado.
@@ -767,6 +824,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   }
 
   Future<void> _changeScrollMode(ScrollMode mode) async {
+    if (_playPending || _switchingVoiceEngine) return;
     if (_recording || _recordingBusy) {
       _notice('Finalize a gravação antes de trocar o modo de leitura.');
       return;
@@ -782,7 +840,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   }
 
   Future<void> _changeMode(PrompterMode mode) async {
-    if (_recording || _recordingBusy || _cameraBusy || mode == _mode) return;
+    if (_recording || _recordingBusy || _cameraBusy || _playPending ||
+        _switchingVoiceEngine || mode == _mode) return;
     await _pause();
     if (mode == PrompterMode.camera) {
       await _initCamera();
@@ -1191,9 +1250,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                   ? 'Ouvindo: avanço somente após palavra confirmada'
                   : 'Texto parado na última palavra lida',
                   style: Theme.of(context).textTheme.labelSmall),
-            Text(_mode == PrompterMode.camera
-                    ? 'Voz streaming pt-BR (fallback Whisper): $_voiceStatus'
-                    : 'Voz streaming pt-BR (fallback Whisper/nativo): $_voiceStatus',
+            Text('Reconhecimento automático: $_voiceStatus',
                 maxLines: 2, textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodySmall),
             if (_playing || _playPending || _firstRawHypothesis.isNotEmpty)
@@ -1542,16 +1599,6 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                           onSelectionChanged: (value) =>
                               _changeScrollMode(value.first),
                         ),
-                        if (_scrollMode == ScrollMode.voice && _mode == PrompterMode.external)
-                          SwitchListTile(
-                            contentPadding: EdgeInsets.zero,
-                            dense: true,
-                            title: const Text('Voz nativa do aparelho (experimental)'),
-                            subtitle: const Text('Alternativa ao Nemotron; requer reconhecimento local em português.'),
-                            value: _preferNativeVoice,
-                            onChanged: _playing || _playPending || _recordingBusy
-                                ? null : (value) => setState(() => _preferNativeVoice = value),
-                          ),
                         const SizedBox(height: 10),
                         Row(children: [
                           Expanded(

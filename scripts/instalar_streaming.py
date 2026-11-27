@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Instala Nemotron 3.5 INT8 streaming pt-BR para Flutter sem Git LFS.
 
-Downloads oficiais da sherpa-onnx. Variantes de 160, 320 e 560 ms;
+Downloads oficiais da sherpa-onnx. Variantes de 80, 160, 320 e 560 ms;
 a latência real também depende do dispositivo e da decodificação.
 A divisão do encoder em partes de 8 MiB evita carregar ~627 MB em RAM no
 primeiro início do aplicativo.
@@ -26,6 +26,7 @@ URL = f'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/{ARCH
 SHA256 = 'c6bf5e0df765f9d5b43bc9e0536d4b4b3e7d40bdf5ecf13e45f134c51c05ae3a'
 SIZE = 475271763
 VARIANTS = {
+    80: ('fb170128c496db33a1fb9f5f9f823257f42f911224ee218bb429f3c2eaf90a8d', 475274007),
     160: ('a81909a1780d84cff16d73c15e13e67d9d81d8839faf14870d507d8499f7a61a', 475273363),
     320: ('5f311142337a5c161e92d49f7a3009d8607d3836f39d610bff5307c74d1d2c53', 475272949),
     560: (SHA256, SIZE),

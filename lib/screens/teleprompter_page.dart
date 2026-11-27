@@ -376,7 +376,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       };
 
   void _onTranscript(String transcript, bool isFinal) {
-    if (!_playing || _scrollMode != ScrollMode.voice || !mounted ||
+    if ((!_playing && !_playPending) || _scrollMode != ScrollMode.voice || !mounted ||
         _manualScrolling || _resettingVoice) return;
     final heard = transcript.trim();
     if (heard.isEmpty) return;
@@ -423,7 +423,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
 
     if (changed) {
       _voiceScrollGate.onConfirmed(decision);
-      if (decision == VoiceScrollDecision.advance) {
+      if (_playing && decision == VoiceScrollDecision.advance) {
         _scrollToFocus();
       }
       // Uma única correção tardia atualiza o destaque da palavra efetivamente
@@ -527,6 +527,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     // Entrar na tela cheia ANTES de carregar o Whisper (pode ser demorado).
     _enterFullScreen();
     _voiceScrollGate.reset();
+    // Nova sessão de áudio: não confundir a primeira parcial com a fala antiga.
+    _tracker.seek(_readingCursor.confirmedIndex);
     _playPending = true;
     _broadcast();
     _pendingVoiceActivity = false;
@@ -576,6 +578,9 @@ class _TeleprompterPageState extends State<TeleprompterPage>
           _ticker = Timer.periodic(const Duration(milliseconds: 33), _tick);
         }
         if (_fullScreenControlsVisible) _autoHideFullScreenControls();
+        if (_scrollMode == ScrollMode.voice && _voiceScrollGate.isSpeaking && _highlightIndex >= 0) {
+          _scrollToFocus();
+        }
       }
       _broadcast();
     } catch (e) {

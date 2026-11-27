@@ -3,6 +3,24 @@ import 'package:teleprompter_ai/core/script_matcher.dart';
 import 'package:teleprompter_ai/core/speech_alignment_tracker.dart';
 
 void main() {
+  test('primeira palavra confirmada mesmo com segunda incompleta', () {
+    final tracker = SpeechAlignmentTracker(ScriptMatcher('Bom dia vamos começar.'));
+    expect(tracker.accept('Bom di', streamingPartials: true), 0);
+    expect(tracker.accept('Bom dia', streamingPartials: true), 1);
+    expect(tracker.accept('Bom dia va', streamingPartials: true), isNull);
+    expect(tracker.accept('Bom dia vamos', streamingPartials: true), 2);
+  });
+  test('primeira palavra curta após reposicionamento', () {
+    final tracker = SpeechAlignmentTracker(ScriptMatcher('Hoje a casa é bonita.'));
+    tracker.seek(0);
+    expect(tracker.accept('a ca', streamingPartials: true), 1);
+    expect(tracker.accept('a casa', streamingPartials: true), 2);
+  });
+  test('primeira hipótese parcial incompleta não inventa palavra', () {
+    final tracker = SpeechAlignmentTracker(ScriptMatcher('Bom dia.'));
+    expect(tracker.accept('Bo', streamingPartials: true), isNull);
+    expect(tracker.accept('Bom di', streamingPartials: true), 0);
+  });
   test('streaming confirma imediatamente palavras curtas e repetidas', () {
     final tracker = SpeechAlignmentTracker(ScriptMatcher('A casa de um amigo é bonita.'));
     expect(tracker.accept('A', streamingPartials: true), 0);

@@ -48,7 +48,10 @@ class SpeechAlignmentTracker {
       if ((!isFinal || previousWasFinal) &&
           !(streamingPartials && previousWasFinal && !isFinal)) return null;
     }
-    if (previousWasFinal && !isFinal) _newUtterance = true;
+    if (previousWasFinal && !isFinal) {
+      _newUtterance = true;
+      if (streamingPartials) _lastCommittedHypothesis = null;
+    }
     if (isFinal) _newUtterance = false;
     _lastHypothesis = normalized;
     _lastWasFinal = isFinal;
@@ -60,32 +63,49 @@ class SpeechAlignmentTracker {
       // extensão nova quando o prefixo termina no cursor conhecido.
       // Isso inclui palavras curtas, sem avançar por tempo ou som sozinho.
       final words = spoken.map((word) => word.normalized).toList();
-      final prior = previous?.split(' ') ?? <String>[];
+      final committed = _lastCommittedHypothesis?.split(' ') ?? <String>[];
       final fresh = previous == null || (previousWasFinal && !isFinal);
       var start = -1;
-      if (fresh) {
+      if (fresh || (_lastCommittedHypothesis == null && !_newUtterance)) {
         start = 0;
-      } else if (previous == _lastCommittedHypothesis &&
-          words.length > prior.length && _index >= 0 &&
-          prior.isNotEmpty && prior.last == matcher.words[_index].normalized) {
+      } else if (committed.isNotEmpty && _index >= 0 &&
+          committed.last == matcher.words[_index].normalized &&
+          words.length >= committed.length) {
         var samePrefix = true;
-        for (var i = 0; i < prior.length; i++) {
-          if (prior[i] != words[i]) { samePrefix = false; break; }
+        for (var i = 0; i < committed.length; i++) {
+          if (committed[i] != words[i]) { samePrefix = false; break; }
         }
-        if (samePrefix) start = prior.length;
+        if (samePrefix) start = committed.length;
       }
       if (start >= 0 && start < words.length) {
         var target = _index;
-        for (var i = start; i < words.length; i++) {
-          if (target + 1 >= matcher.words.length ||
-              matcher.words[target + 1].normalized != words[i]) break;
+        var consumed = start;
+        while (consumed < words.length && target + 1 < matcher.words.length &&
+            matcher.words[target + 1].normalized == words[consumed]) {
           target++;
+          consumed++;
         }
-        // Não marque um prefixo curto como certeza se o resto contradiz.
-        if (target > _index && target - _index == words.length - start) {
+        // A palavra seguinte pode estar incompleta (ex.: "Bom di").
+        // Confirme o prefixo exato agora, não espere a segunda palavra.
+        // Se o restante contradiz o roteiro, mantenha o alinhador robusto.
+        final incompleteTail = !isFinal && consumed == words.length - 1 &&
+            target + 1 < matcher.words.length &&
+            matcher.words[target + 1].normalized.startsWith(words[consumed]);
+        if (target > _index && (consumed == words.length || incompleteTail)) {
           _newUtterance = false;
-          return _commit(target);
+          final result = _commit(target);
+          _lastCommittedHypothesis = words.take(consumed).join(' ');
+          return result;
         }
+      }
+      // Uma revisão da mesma hipótese não é uma nova fala. Se ela não
+      // acrescenta palavras ao prefixo já confirmado, não avance por repetição.
+      if (!fresh && committed.isNotEmpty && words.length <= committed.length) {
+        var samePrefix = true;
+        for (var i = 0; i < words.length; i++) {
+          if (committed[i] != words[i]) { samePrefix = false; break; }
+        }
+        if (samePrefix) return null;
       }
       // Hipótese final duplicada ou revisão sem extensão: não consuma
       // a próxima palavra repetida por engano.

@@ -25,6 +25,7 @@ class StreamingModelFiles {
 
   static const _assets = 'assets/models/streaming';
   static const _modelIds = {
+    'sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-80ms-int8-2026-06-11',
     'sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-160ms-int8-2026-06-11',
     'sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-320ms-int8-2026-06-11',
     'sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11',
@@ -139,8 +140,8 @@ class StreamingAsrWorker implements AsrWorker {
   final void Function(String status) onStatus;
   final void Function(bool speaking)? onSpeechActivity;
 
-  final PcmFrameAccumulator _frames = PcmFrameAccumulator(frameBytes: 1600); // 50 ms: reduz espera de entrada
-  final SpeechActivityGate _gate = SpeechActivityGate();
+  final PcmFrameAccumulator _frames = PcmFrameAccumulator(frameBytes: 640); // 20 ms PCM
+  final SpeechActivityGate _gate = SpeechActivityGate(minimumSpeechFrames: 2);
   ReceivePort? _events;
   StreamSubscription<dynamic>? _subscription;
   Isolate? _isolate;
@@ -154,6 +155,9 @@ class StreamingAsrWorker implements AsrWorker {
   int _droppedFrames = 0;
   static const int _maxPendingBytes = 3 * 16000 * 2; // limite de segurança, não latência alvo.
   int _lastLagWarningAt = 0;
+  final Stopwatch _clock = Stopwatch();
+  int? _speechOnsetMs;
+  bool _firstPartialReported = false;
 
   @override
   Future<void> start() async {
@@ -170,6 +174,7 @@ class StreamingAsrWorker implements AsrWorker {
           _commands = event['port'] as SendPort;
           _running = true;
           _following = true;
+          _clock.start();
           if (!ready.isCompleted) ready.complete();
           onStatus('Reconhecimento STREAMING pt-BR pronto.');
         case 'ack':
@@ -182,6 +187,11 @@ class StreamingAsrWorker implements AsrWorker {
             final value = event['text'];
             if (value is String && value.trim().isNotEmpty) {
               onText(value, event['final'] == true);
+              if (!_firstPartialReported && _speechOnsetMs != null) {
+                _firstPartialReported = true;
+                final elapsed = _clock.elapsedMilliseconds - _speechOnsetMs!;
+                onStatus('Streaming · primeira hipótese: ${elapsed} ms após início detectado');
+              }
             }
           }
         case 'error':
@@ -220,6 +230,7 @@ class StreamingAsrWorker implements AsrWorker {
     final speaking = _gate.currentlySpeaking;
     if (_speaking != speaking) {
       _speaking = speaking;
+      if (speaking && _speechOnsetMs == null) _speechOnsetMs = _clock.elapsedMilliseconds;
       onSpeechActivity?.call(speaking);
     }
     // O ASR recebe também o silêncio: necessário para detectar fim de frase.
@@ -268,6 +279,8 @@ class StreamingAsrWorker implements AsrWorker {
     _gate.reset();
     _queuedBytes = 0;
     _droppedFrames = 0;
+    _speechOnsetMs = null;
+    _firstPartialReported = false;
     if (_speaking) {
       _speaking = false;
       onSpeechActivity?.call(false);

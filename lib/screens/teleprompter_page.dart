@@ -554,15 +554,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     if (next >= end) _pause();
   }
 
-  Future<bool> _nativeLocalVoiceAvailable() async {
-    if (!Platform.isAndroid) return false;
-    try {
-      return await const MethodChannel('flowtext/local_voice')
-          .invokeMethod<bool>('available') ?? false;
-    } catch (_) {
-      return false;
-    }
-  }
+  Future<bool> _nativeLocalVoiceAvailable() async => false; // serviço nativo falhou no teste de campo
 
   bool _sameVoiceSession(int generation) => mounted &&
       generation == _playGeneration && _mode == PrompterMode.external &&

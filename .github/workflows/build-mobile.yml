@@ -1,4 +1,4 @@
-name: Oitosete FlowText 0.10.0 — Build 20
+name: Oitosete FlowText 0.10.0 — Build 21
 
 # Execute manualmente para controlar uso de minutos e downloads grandes.
 on:
@@ -7,9 +7,9 @@ on:
       modelo:
         description: 'Reconhecimento: streaming pt-BR (novo) ou Whisper'
         required: true
-        default: 'streaming_80'
+        default: 'automatico'
         type: choice
-        options: [streaming_80, streaming_160, streaming_320, streaming, streaming_leve, base, tiny, small]
+        options: [automatico, streaming_80, streaming_160, streaming_320, streaming, streaming_leve, base, tiny, small]
       tipo_apk:
         description: 'APK Android: menor para celulares modernos (release_arm64), todas ABIs ou debug'
         required: true
@@ -48,7 +48,11 @@ jobs:
       - name: Instalar modelo de reconhecimento
         shell: bash
         run: |
+          python3 scripts/instalar_vosk.py
           case '${{ inputs.modelo }}' in
+            automatico)
+              python3 scripts/instalar_modelo.py --model tiny
+              ;;
             streaming_80|streaming_160|streaming_320)
               chunk='${{ inputs.modelo }}'
               python3 scripts/instalar_streaming.py --chunk-ms "${chunk#streaming_}"
@@ -231,6 +235,10 @@ jobs:
         shell: bash
         run: |
           case '${{ inputs.modelo }}' in
+            automatico)
+              python3 scripts/instalar_streaming.py --chunk-ms 160
+              python3 scripts/instalar_modelo.py --model tiny
+              ;;
             streaming_80|streaming_160|streaming_320)
               chunk='${{ inputs.modelo }}'
               python3 scripts/instalar_streaming.py --chunk-ms "${chunk#streaming_}"

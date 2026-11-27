@@ -11,9 +11,17 @@ import java.net.InetAddress
 import java.util.concurrent.Executors
 import javax.jmdns.JmDNS
 import javax.jmdns.ServiceInfo
+import org.vosk.Model
+import org.vosk.Recognizer
+import org.json.JSONObject
+import java.io.File
+import java.util.zip.ZipInputStream
 
 class MainActivity : FlutterActivity() {
     private val executor = Executors.newSingleThreadExecutor()
+    private val voiceExecutor = Executors.newSingleThreadExecutor()
+    private var voiceModel: Model? = null
+    private var voiceRecognizer: Recognizer? = null
     private var dns: JmDNS? = null
     private var multicast: WifiManager.MulticastLock? = null
 
@@ -31,6 +39,36 @@ class MainActivity : FlutterActivity() {
                     result.success(available)
                 } else {
                     result.notImplemented()
+                }
+            }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "flowtext/vosk")
+            .setMethodCallHandler { call, result ->
+                voiceExecutor.execute {
+                    try {
+                        val value: Any? = when (call.method) {
+                            "start" -> {
+                                closeVoice()
+                                val model = Model(prepareVoiceModel().absolutePath)
+                                voiceModel = model
+                                voiceRecognizer = Recognizer(model, 16000.0f)
+                                null
+                            }
+                            "pcm" -> {
+                                val pcm = call.arguments as? ByteArray ?: error("PCM inválido")
+                                val recognizer = voiceRecognizer ?: error("Vosk inativo")
+                                val isFinal = recognizer.acceptWaveForm(pcm, pcm.size)
+                                val obj = JSONObject(if (isFinal) recognizer.result else recognizer.partialResult)
+                                mapOf("text" to obj.optString(if (isFinal) "text" else "partial"), "final" to isFinal)
+                            }
+                            "reset" -> { voiceRecognizer?.reset(); null }
+                            "stop" -> { closeVoice(); null }
+                            else -> error("Método Vosk desconhecido")
+                        }
+                        runOnUiThread { result.success(value) }
+                    } catch (e: Throwable) {
+                        if (call.method == "start") closeVoice()
+                        runOnUiThread { result.error("VOSK", e.message ?: e.javaClass.simpleName, null) }
+                    }
                 }
             }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "flowtext/lan_name")
@@ -72,6 +110,41 @@ class MainActivity : FlutterActivity() {
             }
     }
 
+    private fun prepareVoiceModel(): File {
+        val root = File(filesDir, "flowtext-vosk-pt-0.3")
+        val marker = File(root, ".ready")
+        val model = File(root, "vosk-model-small-pt-0.3")
+        if (marker.isFile && model.isDirectory) return model
+        root.deleteRecursively()
+        root.mkdirs()
+        val base = root.canonicalPath + File.separator
+        assets.open("flowtext-vosk.zip").use { input ->
+            ZipInputStream(input).use { zip ->
+                while (true) {
+                    val entry = zip.nextEntry ?: break
+                    val target = File(root, entry.name)
+                    require(target.canonicalPath.startsWith(base)) { "Caminho inválido no modelo" }
+                    if (entry.isDirectory) target.mkdirs()
+                    else {
+                        target.parentFile?.mkdirs()
+                        target.outputStream().use { out -> zip.copyTo(out) }
+                    }
+                    zip.closeEntry()
+                }
+            }
+        }
+        check(model.isDirectory) { "Modelo Vosk ausente" }
+        marker.writeText("0.3")
+        return model
+    }
+
+    private fun closeVoice() {
+        try { voiceRecognizer?.close() } catch (_: Throwable) {}
+        voiceRecognizer = null
+        try { voiceModel?.close() } catch (_: Throwable) {}
+        voiceModel = null
+    }
+
     private fun closeDns() {
         try { dns?.close() } catch (_: Exception) {}
         dns = null
@@ -82,6 +155,8 @@ class MainActivity : FlutterActivity() {
     override fun onDestroy() {
         executor.execute { closeDns() }
         executor.shutdown()
+        voiceExecutor.execute { closeVoice() }
+        voiceExecutor.shutdown()
         super.onDestroy()
     }
 }

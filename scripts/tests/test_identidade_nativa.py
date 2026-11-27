@@ -62,6 +62,8 @@ class IdentidadeNativaTests(unittest.TestCase):
         self.assertIn('package com.example.teleprompter_ai', activity.read_text())
         self.assertIn('flowtext/lan_name', activity.read_text())
         self.assertIn('flowtext/local_voice', activity.read_text())
+        self.assertIn('flowtext/vosk', activity.read_text())
+        self.assertEqual(gradle.read_text().count('com.alphacephei:vosk-android:0.3.75'), 1)
         self.assertIn('isOnDeviceRecognitionAvailable', activity.read_text())
         self.assertIn('CHANGE_WIFI_MULTICAST_STATE', first)
         self.assertTrue((main / 'res/mipmap-hdpi/ic_launcher.png').is_file())

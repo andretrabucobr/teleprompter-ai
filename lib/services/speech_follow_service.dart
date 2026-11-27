@@ -22,6 +22,8 @@ class SpeechFollowService {
   bool _starting = false;
   bool _disposed = false;
   String? _localeId;
+  int _generation = 0;
+  Future<void> _resetQueue = Future<void>.value();
 
   bool get running => _wantsListening;
 
@@ -69,10 +71,11 @@ class SpeechFollowService {
   Future<void> _listen() async {
     if (_disposed || !_wantsListening || _starting || _engine.isListening) return;
     _starting = true;
+    final generation = ++_generation;
     try {
       await _engine.listen(
         onResult: (result) {
-          if (!_disposed && _wantsListening) {
+          if (!_disposed && _wantsListening && generation == _generation) {
             onTranscript(result.recognizedWords, result.finalResult);
           }
         },
@@ -102,7 +105,23 @@ class SpeechFollowService {
     });
   }
 
+  Future<void> reset() {
+    ++_generation;
+    _retry?.cancel();
+    _resetQueue = _resetQueue.catchError((Object _) {}).then((_) async {
+      if (!_wantsListening || _disposed) return;
+      await _engine.cancel();
+      _retry?.cancel();
+      if (_wantsListening && !_disposed) {
+        await _listen();
+        if (!_engine.isListening) _scheduleRestart();
+      }
+    });
+    return _resetQueue;
+  }
+
   Future<void> stop() async {
+    ++_generation;
     _wantsListening = false;
     _retry?.cancel();
     if (_initialized) await _engine.stop();

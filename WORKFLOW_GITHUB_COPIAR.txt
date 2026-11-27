@@ -1,4 +1,4 @@
-name: Oitosete FlowText 0.9.4 — Android e iOS
+name: Oitosete FlowText 0.10.0 — Android e iOS
 
 # Execute manualmente para controlar uso de minutos e downloads grandes.
 on:

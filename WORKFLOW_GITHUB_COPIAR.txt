@@ -140,7 +140,7 @@ jobs:
         run: python3 scripts/relatorio_tamanho.py
       - uses: actions/upload-artifact@v4
         with:
-          name: oitosete-flowtext-v094-${{ inputs.modelo }}-${{ inputs.tipo_apk }}
+          name: oitosete-flowtext-v0100-${{ inputs.modelo }}-${{ inputs.tipo_apk }}
           path: |
             build/app/outputs/flutter-apk/*.apk
             relatorio_tamanho_build.md
@@ -201,7 +201,7 @@ jobs:
         run: cd build/ios/iphoneos && zip -qry ../../../oitosete-flowtext-ios-sem-assinatura.zip Runner.app
       - uses: actions/upload-artifact@v4
         with:
-          name: oitosete-flowtext-v094-${{ inputs.modelo }}-ios-unsigned
+          name: oitosete-flowtext-v0100-${{ inputs.modelo }}-ios-unsigned
           path: |
             oitosete-flowtext-ios-sem-assinatura.zip
             relatorio_tamanho_ios.txt

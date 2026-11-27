@@ -135,7 +135,7 @@ class StreamingAsrWorker implements AsrWorker {
   final void Function(String status) onStatus;
   final void Function(bool speaking)? onSpeechActivity;
 
-  final PcmFrameAccumulator _frames = PcmFrameAccumulator();
+  final PcmFrameAccumulator _frames = PcmFrameAccumulator(frameBytes: 1600); // 50 ms: reduz espera de entrada
   final SpeechActivityGate _gate = SpeechActivityGate();
   ReceivePort? _events;
   StreamSubscription<dynamic>? _subscription;

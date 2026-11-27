@@ -4,12 +4,14 @@ import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../core/script_matcher.dart';
+import '../core/reading_navigation.dart';
 import '../core/app_colors.dart';
 import '../core/last_spoken_word.dart';
 import '../core/confirmed_word_cursor.dart';
@@ -87,6 +89,14 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   bool _remoteConnected = false;
   bool _allowRemoteRecording = false;
   double _fontSize = 36;
+  bool _manualScrolling = false;
+  bool _resettingVoice = false;
+  int _seekGeneration = 0;
+  int? _undoIndex;
+  int _lastSpeedBroadcast = 0;
+  final _readerKey = GlobalKey();
+  late ReadingNavigation _navigation = ReadingNavigation(_script.text, _matcher.words);
+  Future<void> _fontSaveQueue = Future<void>.value();
   double _speed = 40;
   double _viewerWidth = 320;
   double _viewerHeight = 400;
@@ -116,10 +126,13 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     try {
       final content = await _repository.load();
       final savedVideos = await _repository.listVideos();
+      final savedFont = await _repository.loadFontSize();
       if (mounted) {
         _script.text = content;
         setState(() {
+          _fontSize = savedFont;
           _matcher = ScriptMatcher(content);
+          _navigation = ReadingNavigation(content, _matcher.words);
           _tracker = SpeechAlignmentTracker(_matcher);
           _readingCursor = ConfirmedWordCursor(
             wordCount: _matcher.words.length,
@@ -136,7 +149,9 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   }
 
   void _scriptChanged() {
+    _undoIndex = null;
     _matcher = ScriptMatcher(_script.text);
+    _navigation = ReadingNavigation(_script.text, _matcher.words);
     _tracker = SpeechAlignmentTracker(_matcher);
     _readingCursor = ConfirmedWordCursor(
       wordCount: _matcher.words.length,
@@ -147,6 +162,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     _voiceScrollGate.reset();
     _activeIndex = -1;
     _lastRecognizedText = '';
+    _broadcast();
     _saveTimer?.cancel();
     _saveTimer = Timer(const Duration(milliseconds: 600), () async {
       try {
@@ -270,6 +286,13 @@ class _TeleprompterPageState extends State<TeleprompterPage>
 
   Map<String, dynamic> _snapshot() => {
         'playing': _playing,
+        'script': _script.text,
+        'wordOffsets': [for (final word in _matcher.words) [word.start, word.end]],
+        'highlightIndex': _highlightIndex,
+        'allowRemoteRecording': _allowRemoteRecording,
+        'undoAvailable': _undoIndex != null,
+        'viewportWidth': _viewerWidth,
+        'viewportHeight': _viewerHeight,
         'mode': _mode == PrompterMode.camera ? 'camera' : 'external',
         'scrollMode': _scrollMode.name,
         'mirror': _mirror,
@@ -283,7 +306,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       };
 
   void _onTranscript(String transcript, bool isFinal) {
-    if (!_playing || _scrollMode != ScrollMode.voice || !mounted) return;
+    if (!_playing || _scrollMode != ScrollMode.voice || !mounted ||
+        _manualScrolling || _resettingVoice) return;
     final heard = transcript.trim();
     if (heard.isEmpty) return;
 
@@ -295,7 +319,13 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     );
     if (decision == VoiceScrollDecision.ignore) return;
 
-    final confirmed = _tracker.accept(heard, isFinal: isFinal);
+    final confirmed = _tracker.accept(heard, isFinal: isFinal,
+      allowRewind: _capture.streamingVoice && decision == VoiceScrollDecision.advance);
+    if (confirmed != null && confirmed < _readingCursor.confirmedIndex) {
+      _undoIndex = _focusIndex;
+      _readingCursor.seek(confirmed - 1);
+      _voiceScrollEpoch++;
+    }
     final changed = confirmed != null && _readingCursor.confirm(confirmed);
     setState(() {
       _lastRecognizedText = heard.length > 100
@@ -329,8 +359,10 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     if (!active) {
       // Invalida callbacks de layout agendados antes do silêncio e cancela
       // a animação em andamento, para que nenhum frame posterior avance.
-      _voiceScrollEpoch++;
-      _freezeAutomaticScroll();
+      if (!_manualScrolling) {
+        _voiceScrollEpoch++;
+        _freezeAutomaticScroll();
+      }
     }
     if (_voiceIsSpeaking != active) {
       setState(() => _voiceIsSpeaking = active);
@@ -354,51 +386,44 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     bool blockedBySilence() => !force && _playing &&
         _scrollMode == ScrollMode.voice && !_speech.running &&
         !_voiceScrollGate.isSpeaking;
-    if (blockedBySilence()) return;
+    if (_manualScrolling || blockedBySilence()) return;
     final capturedEpoch = _voiceScrollEpoch;
     // Fixar a última palavra lida no terço superior, mantendo as próximas
     // linhas visíveis. Sem confirmação do ASR não há chamada automática.
     final targetIndex = _scrollMode == ScrollMode.voice
-        ? (_activeIndex >= 0 ? _activeIndex : 0)
-        : _activeIndex;
+        ? (force || _highlightIndex < 0 ? _focusIndex : _highlightIndex)
+        : (_activeIndex >= 0 ? _activeIndex : _focusIndex);
     if (targetIndex < 0 || targetIndex >= _matcher.words.length) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_scroll.hasClients || blockedBySilence() ||
+      if (!mounted || !_scroll.hasClients || _manualScrolling || blockedBySilence() ||
           capturedEpoch != _voiceScrollEpoch) return;
+      if (targetIndex >= _matcher.words.length) return;
       final word = _matcher.words[targetIndex];
-      final painter = TextPainter(
-        text: TextSpan(text: _script.text, style: _readingStyle()),
-        textDirection: TextDirection.ltr,
-        textAlign: TextAlign.center,
-        textScaler: MediaQuery.textScalerOf(context),
-      );
-      try {
-        painter.layout(maxWidth: math.max(1.0, _viewerWidth - 48));
-        final boxes = painter.getBoxesForSelection(
-          TextSelection(baseOffset: word.start, extentOffset: word.end),
-        );
-        if (boxes.isEmpty) return;
-        final topPadding = _viewerHeight * .3;
-        final destination = (boxes.first.top + topPadding - _viewerHeight * .36)
-            .clamp(0.0, _scroll.position.maxScrollExtent).toDouble();
-        if ((_scroll.offset - destination).abs() < 1.5) return;
-        // A animação curta é apenas uma resposta ao ASR, não um avanço livre.
-        _scroll.animateTo(destination,
-            duration: const Duration(milliseconds: 120),
-            curve: Curves.easeOutCubic);
-      } finally {
-        painter.dispose();
-      }
+      final render = _readerKey.currentContext?.findRenderObject();
+      if (render is! RenderParagraph || !render.hasSize || targetIndex >= _matcher.words.length) return;
+      final boxes = render.getBoxesForSelection(TextSelection(baseOffset: word.start, extentOffset: word.end));
+      if (boxes.isEmpty) return;
+      final destination = (boxes.first.top - _viewerHeight * .075)
+          .clamp(0.0, _scroll.position.maxScrollExtent).toDouble();
+      if ((_scroll.offset - destination).abs() < 1.5) return;
+      _scroll.animateTo(destination, duration: const Duration(milliseconds: 90), curve: Curves.easeOutCubic);
     });
   }
 
   void _tick(Timer _) {
-    if (!_playing || !_scroll.hasClients || _scrollMode == ScrollMode.voice) {
+    if (!_playing || !_scroll.hasClients || _manualScrolling || _scrollMode == ScrollMode.voice) {
       return; // o modo Voz NUNCA avança pelo relógio nem pelo VAD
     }
     final end = _scroll.position.maxScrollExtent;
     final next = math.min(end, _scroll.offset + _speed / 30);
     _scroll.jumpTo(next);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastSpeedBroadcast >= 250) {
+      _lastSpeedBroadcast = now;
+      _focusIndex = _wordAtReadingLine();
+      _activeIndex = _focusIndex;
+      _broadcast();
+    }
     if (next >= end) _pause();
   }
 
@@ -478,6 +503,9 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     // Não solta o microfone enquanto a inicialização do vídeo está em curso.
     if (_recordingBusy && !_recording) return;
     ++_playGeneration;
+    ++_seekGeneration;
+    _resettingVoice = false;
+    _manualScrolling = false;
     _ticker?.cancel();
     _pendingVoiceActivity = false;
     _voiceScrollGate.reset();
@@ -504,6 +532,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
 
   Future<void> _restart() async {
     await _pause();
+    _undoIndex = null;
     if (_scroll.hasClients) _scroll.jumpTo(0);
     _tracker.seek(-1);
     _readingCursor.seek(-1);
@@ -517,22 +546,83 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     _broadcast();
   }
 
-  void _seek(int delta) {
-    if (_matcher.words.isEmpty) return;
-    final next = (_focusIndex + delta)
-        .clamp(0, _matcher.words.length - 1).toInt();
-    // A navegação altera a âncora, mas não deve pintar como "lida" uma
-    // palavra que a pessoa selecionou sem falar.
+  int _wordAtReadingLine() {
+    final render = _readerKey.currentContext?.findRenderObject();
+    if (render is! RenderParagraph || !render.hasSize || !_scroll.hasClients) return _focusIndex;
+    final offset = render.getPositionForOffset(Offset(
+      1, (_scroll.offset + _viewerHeight * .075).clamp(0.0, render.size.height).toDouble(),
+    )).offset;
+    return _navigation.atOffset(offset);
+  }
+
+  void _seek(int delta) => _seekTo(_focusIndex + delta);
+  void _seekParagraph(int direction) => _seekTo(_navigation.paragraph(_focusIndex, direction));
+  void _undoSeek() {
+    final target = _undoIndex;
+    if (target != null) _seekTo(target);
+  }
+  void _setFont(double value) {
+    setState(() => _fontSize = value.clamp(12, 200).toDouble());
+    final size = _fontSize;
+    _fontSaveQueue = _fontSaveQueue.catchError((Object _) {}).then((_) => _repository.saveFontSize(size));
+    unawaited(_fontSaveQueue.catchError((Object _) {}));
+    _scrollToFocus(force: true);
+    _broadcast();
+  }
+
+  void _seekTo(int index, {bool reposition = true}) {
+    if (_matcher.words.isEmpty || !mounted) return;
+    final next = index.clamp(0, _matcher.words.length - 1).toInt();
+    if (next != _focusIndex) _undoIndex = _focusIndex;
+    _manualScrolling = false;
+    _voiceScrollEpoch++;
+    _freezeAutomaticScroll();
+    _voiceScrollGate.reset();
+    _voiceIsSpeaking = false;
     final anchor = _scrollMode == ScrollMode.voice ? next - 1 : next;
     _tracker.seek(anchor);
     _readingCursor.seek(anchor);
     setState(() {
       _activeIndex = anchor;
-      _focusIndex = _readingCursor.nextIndex;
+      _focusIndex = next;
       _highlightIndex = -1;
+      _lastRecognizedText = '';
     });
-    _scrollToFocus(force: true);
+    // Limpa áudio ASR pendente sem interromper o WAV/câmera.
+    if (_capture.followingVoice) _capture.resetFollowing();
+    if (_speech.running) {
+      final generation = ++_seekGeneration;
+      _resettingVoice = true;
+      unawaited(_speech.reset().catchError((Object _) {}).whenComplete(() {
+        if (generation == _seekGeneration) _resettingVoice = false;
+      }));
+    }
+    if (reposition) _scrollToFocus(force: true);
     _broadcast();
+  }
+
+  bool _onReaderScroll(ScrollNotification n) {
+    if (n.depth != 0) return false;
+    if ((n is ScrollStartNotification && n.dragDetails != null) ||
+        (n is ScrollUpdateNotification && n.dragDetails != null)) {
+      if (!_manualScrolling || n is ScrollStartNotification) _voiceScrollEpoch++;
+      _manualScrolling = true;
+    } else if (n is ScrollEndNotification && _manualScrolling) {
+      final target = _wordAtReadingLine();
+      final epoch = ++_voiceScrollEpoch;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _manualScrolling && epoch == _voiceScrollEpoch) _seekTo(target, reposition: false);
+      });
+      WidgetsBinding.instance.ensureVisualUpdate();
+    }
+    return false;
+  }
+
+  void _selectAt(Offset localPosition) {
+    final render = _readerKey.currentContext?.findRenderObject();
+    if (render is RenderParagraph && render.hasSize) {
+      _seekTo(_navigation.atOffset(render.getPositionForOffset(localPosition).offset));
+    }
   }
 
   Future<void> _changeScrollMode(ScrollMode mode) async {
@@ -544,6 +634,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     await _pause();
     if (!mounted) return;
     setState(() => _scrollMode = mode);
+    _seekTo(_focusIndex);
     _broadcast();
     // Selecionar Voz não inicia o microfone sem o usuário pedir.
     // Use Iniciar por voz para entrar em tela cheia e começar a leitura.
@@ -727,21 +818,32 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       case 'seek':
         if (value is! num) throw StateError('Posição inválida.');
         _seek(value.toInt().clamp(-100, 100).toInt());
+      case 'seek_word':
+        if (value is! int) throw StateError('Posição inválida.');
+        _seekTo(value);
+      case 'seek_paragraph':
+        if (value is! int || (value != -1 && value != 1)) throw StateError('Direção inválida.');
+        _seekParagraph(value);
+      case 'undo_seek':
+        _undoSeek();
+      case 'set_scroll_mode':
+        if (_recording || _recordingBusy) throw StateError('Finalize a gravação antes de trocar de modo.');
+        if (value != 'voice' && value != 'speed') throw StateError('Modo inválido.');
+        await _changeScrollMode(value == 'voice' ? ScrollMode.voice : ScrollMode.speed);
       case 'set_speed':
-        if (value is! num) throw StateError('Velocidade inválida.');
+        if (value is! num || !value.isFinite) throw StateError('Velocidade inválida.');
         setState(() => _speed = value.toDouble().clamp(10, 140).toDouble());
       case 'set_font_size':
-        if (value is! num) throw StateError('Fonte inválida.');
-        setState(() => _fontSize = value.toDouble().clamp(20, 72).toDouble());
-        _scrollToFocus(force: true);
+        if (value is! num || !value.isFinite) throw StateError('Fonte inválida.');
+        _setFont(value.toDouble());
       case 'set_mirror':
         if (value is! bool) throw StateError('Espelhamento inválido.');
         setState(() => _mirror = value);
       case 'record_start':
-        if (mounted && _editing) setState(() => _editing = false);
         if (!_allowRemoteRecording) {
           throw StateError('Autorize a gravação remota no celular principal.');
         }
+        if (mounted && _editing) setState(() => _editing = false);
         await _startRecording();
       case 'record_stop':
         await _stopRecording();
@@ -781,6 +883,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                 ),
                 const SizedBox(height: 14),
                 SelectableText('IP: ${pairing.host}   Porta: ${pairing.port}'),
+                const Text('No computador, abra este endereço no navegador:'),
+                SelectableText('http://${pairing.host}:${pairing.port}/'),
                 SelectableText('PIN: ${pairing.pin}',
                     style: Theme.of(context).textTheme.headlineSmall),
                 const SizedBox(height: 14),
@@ -792,6 +896,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                   onChanged: (value) {
                     setState(() => _allowRemoteRecording = value);
                     setSheetState(() {});
+                    _broadcast();
                   },
                 ),
                 const Text('Somente Wi-Fi de confiança. O tráfego da versão '
@@ -817,33 +922,20 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   }
 
   List<InlineSpan> _styledText() {
-    final result = <InlineSpan>[];
     final text = _script.text;
-    var cursor = 0;
-    for (var i = 0; i < _matcher.words.length; i++) {
-      final word = _matcher.words[i];
-      if (word.start > cursor) result.add(TextSpan(text: text.substring(cursor, word.start)));
-      // Só a última palavra reconhecida fica marcada. Nenhuma palavra
-      // predita nem outras palavras anteriores recebem cor diferente.
-      final lastSpoken = isLastSpokenWord(
-        wordIndex: i,
-        confirmedIndex: _highlightIndex,
-        voiceMode: _scrollMode == ScrollMode.voice,
-      );
-      result.add(TextSpan(
-        text: text.substring(word.start, word.end),
-        style: lastSpoken
-            ? const TextStyle(
-                color: AppColors.onBrand,
-                backgroundColor: AppColors.brand,
-                fontWeight: FontWeight.w700,
-              )
-            : null,
-      ));
-      cursor = word.end;
+    final index = _highlightIndex;
+    if (index < 0 || index >= _matcher.words.length ||
+        !isLastSpokenWord(wordIndex: index, confirmedIndex: index, voiceMode: _scrollMode == ScrollMode.voice)) {
+      return [TextSpan(text: text)];
     }
-    if (cursor < text.length) result.add(TextSpan(text: text.substring(cursor)));
-    return result;
+    final word = _matcher.words[index];
+    // Apenas cor: não altera largura, quebra de linha ou geometria a cada palavra.
+    return [
+      TextSpan(text: text.substring(0, word.start)),
+      TextSpan(text: text.substring(word.start, word.end),
+        style: const TextStyle(color: AppColors.onBrand, backgroundColor: AppColors.brand)),
+      TextSpan(text: text.substring(word.end)),
+    ];
   }
 
   Widget _reader() => LayoutBuilder(
@@ -861,18 +953,21 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                   textAlign: TextAlign.center)),
             Transform.flip(
               flipX: _mirror,
-              child: SingleChildScrollView(
+              child: NotificationListener<ScrollNotification>(
+                onNotification: _onReaderScroll,
+                child: SingleChildScrollView(
                 controller: _scroll,
-                // Evita flings automáticos após o toque durante a leitura
-                // por voz; avanço manual permanece nos controles remotos.
-                physics: _playing && _scrollMode == ScrollMode.voice
-                    ? const NeverScrollableScrollPhysics()
-                    : null,
+                physics: const ClampingScrollPhysics(),
                 padding: EdgeInsets.fromLTRB(24, _viewerHeight * .3, 24, _viewerHeight * .75),
-                child: Text.rich(
-                  TextSpan(style: _readingStyle(), children: _styledText()),
-                  textAlign: TextAlign.center,
+                child: GestureDetector(
+                  onLongPressStart: (details) => _selectAt(details.localPosition),
+                  child: Text.rich(
+                    TextSpan(style: _readingStyle(), children: _styledText()),
+                    key: _readerKey,
+                    textAlign: TextAlign.center,
+                  ),
                 ),
+              ),
               ),
             ),
             IgnorePointer(
@@ -937,8 +1032,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
           Row(children: [
             const Text('A'),
             Expanded(child: Slider(
-              min: 20, max: 72, value: _fontSize,
-              onChanged: (value) { setState(() => _fontSize = value); _broadcast(); },
+              min: 12, max: 200, value: _fontSize,
+              onChanged: _setFont,
             )),
             Text('${_fontSize.round()}'),
             const SizedBox(width: 8),
@@ -952,16 +1047,16 @@ class _TeleprompterPageState extends State<TeleprompterPage>
             )),
           ]),
           Row(children: [
-            IconButton(tooltip: 'Voltar 12 palavras',
-                onPressed: () => _seek(-12), icon: const Icon(Icons.fast_rewind)),
+            IconButton(tooltip: 'Voltar parágrafo',
+                onPressed: () => _seekParagraph(-1), icon: const Icon(Icons.fast_rewind)),
             Expanded(child: FilledButton.icon(
               onPressed: _togglePlayback,
               icon: Icon(_playing ? Icons.pause : Icons.play_arrow),
               label: Text(_playing ? 'Pausar' :
                   _scrollMode == ScrollMode.voice ? 'Iniciar por voz' : 'Iniciar'),
             )),
-            IconButton(tooltip: 'Avançar 12 palavras',
-                onPressed: () => _seek(12), icon: const Icon(Icons.fast_forward)),
+            IconButton(tooltip: 'Avançar parágrafo',
+                onPressed: () => _seekParagraph(1), icon: const Icon(Icons.fast_forward)),
             IconButton(tooltip: 'Reiniciar', onPressed: _restart,
                 icon: const Icon(Icons.restart_alt)),
             if (_mode == PrompterMode.camera)
@@ -972,6 +1067,9 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                 onPressed: _recordingBusy ? null : _toggleRecording,
               ),
           ]),
+          if (_undoIndex != null)
+            TextButton.icon(onPressed: _undoSeek, icon: const Icon(Icons.undo), label: const Text('Desfazer posição')),
+          const Text('Arraste o roteiro ou pressione uma palavra para reposicionar.', style: TextStyle(fontSize: 12)),
           if (_latestVideo != null)
             TextButton.icon(
               onPressed: _shareVideo,
@@ -992,6 +1090,9 @@ class _TeleprompterPageState extends State<TeleprompterPage>
               icon: const Icon(Icons.fullscreen_exit),
             ),
           ),
+          if (_undoIndex != null)
+            Positioned(right: 10, top: 58, child: IconButton.filledTonal(
+              tooltip: 'Desfazer posição', icon: const Icon(Icons.undo), onPressed: _undoSeek)),
           if (_scrollMode == ScrollMode.voice)
             Positioned(
               top: 12,
@@ -1043,8 +1144,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
               ),
               child: Row(children: [
                 IconButton(
-                  tooltip: 'Voltar 12 palavras',
-                  onPressed: () => _seek(-12),
+                  tooltip: 'Voltar parágrafo',
+                  onPressed: () => _seekParagraph(-1),
                   icon: const Icon(Icons.fast_rewind),
                 ),
                 Expanded(
@@ -1056,8 +1157,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                   ),
                 ),
                 IconButton(
-                  tooltip: 'Avançar 12 palavras',
-                  onPressed: () => _seek(12),
+                  tooltip: 'Avançar parágrafo',
+                  onPressed: () => _seekParagraph(1),
                   icon: const Icon(Icons.fast_forward),
                 ),
                 if (_mode == PrompterMode.camera)
@@ -1097,6 +1198,11 @@ class _TeleprompterPageState extends State<TeleprompterPage>
               ),
             ),
           if (_fullScreenControlsVisible) _fullScreenToolbar(),
+          if (!_fullScreenControlsVisible)
+            Positioned(bottom: 20, left: 12, child: SafeArea(child: IconButton.filledTonal(
+              tooltip: 'Repetir parágrafo', icon: const Icon(Icons.replay),
+              onPressed: () => _seekParagraph(-1),
+            ))),
         ],
       );
 

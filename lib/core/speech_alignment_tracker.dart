@@ -12,6 +12,7 @@ class SpeechAlignmentTracker {
   int _pendingVotes = 0;
   String? _lastHypothesis;
   bool _lastWasFinal = false;
+  bool _newUtterance = false;
 
   int get index => _index;
 
@@ -22,10 +23,11 @@ class SpeechAlignmentTracker {
     _pendingVotes = 0;
     _lastHypothesis = null;
     _lastWasFinal = false;
+    _newUtterance = false;
   }
 
   /// Retorna uma nova posição apenas quando o alinhamento é confiável.
-  int? accept(String transcript, {bool isFinal = false}) {
+  int? accept(String transcript, {bool isFinal = false, bool allowRewind = false}) {
     final normalized = ScriptMatcher.tokenize(transcript)
         .map((word) => word.normalized).join(' ');
     if (normalized.isEmpty) return null;
@@ -34,21 +36,52 @@ class SpeechAlignmentTracker {
     if (normalized == _lastHypothesis && (!isFinal || _lastWasFinal)) {
       return null;
     }
+    final previousWasFinal = _lastWasFinal;
+    if (previousWasFinal && !isFinal) _newUtterance = true;
+    if (isFinal) _newUtterance = false;
     _lastHypothesis = normalized;
     _lastWasFinal = isFinal;
     // Se o streaming reconhece apenas UMA palavra, podemos acompanhar
     // somente quando ela é EXATAMENTE a próxima do roteiro. Não procurar
     // em outras regiões, evitando saltos e confusões com palavras parecidas.
     final spoken = ScriptMatcher.tokenize(transcript);
-    if (spoken.length == 1 && spoken.single.normalized.length >= 4) {
+    if (spoken.length == 1 && spoken.single.normalized.length >= 3) {
       final adjacent = _index + 1;
       if (adjacent >= 0 && adjacent < matcher.words.length &&
           matcher.words[adjacent].normalized == spoken.single.normalized) {
+        _newUtterance = false;
         return _commit(adjacent);
       }
     }
+    // Caminho rápido: final da hipótese coincide exatamente com as duas
+    // palavras em torno do cursor. Evita DP para cada parcial inequívoca.
+    final adjacent = _index + 1;
+    if (spoken.length >= 2 && _index >= 0 && adjacent < matcher.words.length &&
+        spoken.last.normalized == matcher.words[adjacent].normalized &&
+        spoken[spoken.length - 2].normalized == matcher.words[_index].normalized) {
+      _newUtterance = false;
+      return _commit(adjacent);
+    }
     final match = matcher.align(transcript, _index, finalResult: isFinal);
-    if (match == null || match.index <= _index) return null;
+    if (match == null || match.index <= _index) {
+      // Somente nova hipótese parcial após endpoint do streaming, nunca
+      // janela final do Whisper. Exige quatro palavras exatas e ocorrência única
+      // na janela, sem candidato de avanço. Repetições ambíguas ficam manuais.
+      if (allowRewind && _newUtterance && !isFinal && spoken.length >= 4 && matcher.words.length >= 4) {
+        final tail = spoken.sublist(spoken.length - 4);
+        final hits = <int>[];
+        final lo = (_index - 120).clamp(3, matcher.words.length - 1).toInt();
+        final hi = (_index + 35).clamp(0, matcher.words.length - 1).toInt();
+        for (var end = lo; end <= hi; end++) {
+          if (List.generate(4, (j) => matcher.words[end - 3 + j].normalized == tail[j].normalized).every((x) => x)) hits.add(end);
+        }
+        if (hits.length == 1 && hits.single < _index - 2) {
+          _newUtterance = false;
+          return _commit(hits.single);
+        }
+      }
+      return null;
+    }
     final jump = _index < 0 ? match.index + 1 : match.index - _index;
 
     // Duas palavras inequívocas já bastam para seguir frases curtas no
@@ -70,7 +103,7 @@ class SpeechAlignmentTracker {
                 match.exactWords >= 2 && match.confidence >= .78) ||
             (jump <= 25 && match.matchedWords >= 4 &&
                 match.exactWords >= 3 && match.confidence >= .82));
-    if (immediate) return _commit(match.index);
+    if (immediate) { _newUtterance = false; return _commit(match.index); }
 
     // Nunca avançar grandes trechos apenas por uma palavra repetida ou uma
     // transcrição instável. São necessárias duas janelas finais compatíveis.

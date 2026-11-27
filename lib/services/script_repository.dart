@@ -26,6 +26,20 @@ class ScriptRepository {
     await file.writeAsString(text, flush: true);
   }
 
+  Future<double> loadFontSize() async {
+    final directory = await getApplicationDocumentsDirectory();
+    final file = File('${directory.path}/fonte.txt');
+    try {
+      final value = double.tryParse(await file.readAsString());
+      return value != null && value.isFinite ? value.clamp(12, 200).toDouble() : 36;
+    } catch (_) { return 36; }
+  }
+
+  Future<void> saveFontSize(double size) async {
+    final directory = await getApplicationDocumentsDirectory();
+    await File('${directory.path}/fonte.txt').writeAsString('$size');
+  }
+
   Future<List<String>> listVideos() async {
     final directory = await getApplicationDocumentsDirectory();
     final recordings = Directory('${directory.path}/gravacoes');

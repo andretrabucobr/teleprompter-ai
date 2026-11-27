@@ -1,9 +1,9 @@
-# Subir v0.9.4 completa para o GitHub
+# Subir v0.10.0 completa para o GitHub
 
 1. Extraia o ZIP e envie **o conteúdo da pasta** para a raiz do repositório `andretrabucobr/teleprompter-ai`, incluindo `lib`, `scripts`, `test`, `assets`, `pubspec.yaml` e documentação.
 2. Substitua arquivos de mesmo nome. Não envie pastas `android` ou `ios` geradas localmente; o workflow gera essas plataformas.
 3. Se a pasta oculta `.github` não aparecer, edite `.github/workflows/build-mobile.yml` no navegador e copie integralmente o conteúdo de `WORKFLOW_GITHUB_COPIAR.txt`.
-4. Abra **Actions → Oitosete FlowText 0.9.4 — Android e iOS → Run workflow**.
+4. Abra **Actions → Oitosete FlowText 0.10.0 — Android e iOS → Run workflow**.
 5. Para preservar a precisão de voz e gerar um APK mais enxuto, selecione `modelo=streaming` e `tipo_apk=release_arm64` (recomendação conservadora). Para diminuir também o tamanho do modelo de reserva, selecione `streaming_leve`, sabendo que não terá o Whisper de emergência.
 6. Em `plataforma`, selecione `android` para gerar o APK. Após sucesso, baixe em **Artifacts** o APK e o `relatorio_tamanho_build.md`.
 

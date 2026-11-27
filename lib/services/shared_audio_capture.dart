@@ -48,6 +48,7 @@ class SharedAudioCapture {
   Object? _streamError;
 
   bool get running => _active;
+  bool get streamingVoice => followingVoice && _recognizer is StreamingAsrWorker;
   bool get followingVoice => _active && _transcribing;
   int get sampleCount => _writer?.sampleCount ?? 0;
   String? get currentWavPath => _writer?.path;
@@ -169,6 +170,13 @@ class SharedAudioCapture {
     _recognizer = null;
     _active = false;
     _transcribing = false;
+  }
+
+  void resetFollowing() {
+    if (_transcribing) {
+      _recognizer?.suspend();
+      _recognizer?.resume();
+    }
   }
 
   /// Suspende a leitura inteligente, mas mantém o microfone e o WAV gravando.

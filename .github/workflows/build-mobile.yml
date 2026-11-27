@@ -154,26 +154,50 @@ jobs:
                       gradle.write_text(base, encoding='utf-8')
                       print(f'Lint original restaurado: {gradle}')
           PYTHON
+      - name: Cache de dependências Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
       - name: Compilar APK Android no modo solicitado
         shell: bash
         run: |
-          case '${{ inputs.tipo_apk }}' in
-            release_arm64)
-              # Padrão recomendado: um único APK arm64, sem recursos de debug.
-              flutter build apk --release --target-platform android-arm64 --split-per-abi \
-                --split-debug-info=build/simbolos/android
-              ;;
-            release_todas)
-              # APK separado por arquitetura para dispositivos mais antigos.
-              flutter build apk --release --split-per-abi \
-                --split-debug-info=build/simbolos/android
-              ;;
-            debug)
-              # Apenas para investigação de falhas; arquivo muito maior.
-              flutter build apk --debug
-              ;;
-            *) exit 2 ;;
-          esac
+          set -o pipefail
+          build_apk() {
+            case '${{ inputs.tipo_apk }}' in
+              release_arm64)
+                # Padrão recomendado: um único APK arm64, sem recursos de debug.
+                flutter build apk --release --target-platform android-arm64 --split-per-abi \
+                  --split-debug-info=build/simbolos/android
+                ;;
+              release_todas)
+                # APK separado por arquitetura para dispositivos mais antigos.
+                flutter build apk --release --split-per-abi \
+                  --split-debug-info=build/simbolos/android
+                ;;
+              debug)
+                # Apenas para investigação de falhas; arquivo muito maior.
+                flutter build apk --debug
+                ;;
+              *) exit 2 ;;
+            esac
+          }
+          log="$RUNNER_TEMP/flowtext-android-build.log"
+          for attempt in 1 2 3 4; do
+            if build_apk 2>&1 | tee "$log"; then
+              exit 0
+            fi
+            if ! grep -Eiq 'status code (429|502|503|504)|Too Many Requests|Read timed out|Connection timed out|Connection reset' "$log"; then
+              echo "::error::Falha de compilação não relacionada à rede."
+              exit 1
+            fi
+            if [ "$attempt" -eq 4 ]; then
+              echo "::error::Repositório de dependências indisponível após quatro tentativas."
+              exit 1
+            fi
+            delay=$((30 * attempt))
+            echo "::warning::Falha temporária de rede; nova tentativa em ${delay}s."
+            sleep "$delay"
+          done
       - name: Medir tamanho real do APK e componentes
         run: python3 scripts/relatorio_tamanho.py
       - uses: actions/upload-artifact@v4

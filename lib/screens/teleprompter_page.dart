@@ -84,6 +84,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
 
   PrompterMode _mode = PrompterMode.external;
   ScrollMode _scrollMode = ScrollMode.voice;
+  bool _preferNativeVoice = false;
   bool _editing = true;
   bool _fullScreen = false;
   bool _fullScreenControlsVisible = false;
@@ -117,6 +118,11 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   bool _pendingVoiceActivity = false;
   String _voiceStatus = 'Inativo';
   String _lastRecognizedText = '';
+  String _firstRawHypothesis = '';
+  String _firstMatchedWord = '';
+  final Stopwatch _voiceSessionClock = Stopwatch();
+  int? _firstRawMs;
+  int? _firstMatchMs;
   String? _cameraError;
   String? _latestVideo;
   String? _latestAudio;
@@ -381,17 +387,38 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     final heard = transcript.trim();
     if (heard.isEmpty) return;
 
-    // Streaming e Whisper entregam resultados em atraso. O gate decide
-    // ANTES do alinhamento: a transcrição não deve destravar a rolagem
-    // depois de um evento de silêncio do microfone.
+    // Registra a hipótese bruta ANTES do gate: permite distinguir atraso do
+    // motor de um erro de alinhamento sem armazenar áudio ou enviar dados.
+    if (_firstRawHypothesis.isEmpty) {
+      setState(() {
+        _firstRawHypothesis = heard.length > 100 ? heard.substring(0, 100) : heard;
+        _firstRawMs = _voiceSessionClock.elapsedMilliseconds;
+      });
+    }
+    final streaming = _capture.streamingVoice;
+    final initialEvidence = _highlightIndex < 0 && streaming &&
+        _capture.streamingHasRecentSpeechEvidence && !_voiceScrollGate.isSpeaking;
     final decision = _voiceScrollGate.decide(
       hasActivityDetector: !_speech.running,
+      initialSpeechEvidence: initialEvidence,
     );
-    if (decision == VoiceScrollDecision.ignore) return;
+    if (decision == VoiceScrollDecision.ignore) {
+      // O painel diagnóstico deve continuar mostrando o que o ASR ouviu.
+      if (_lastRecognizedText != heard) {
+        final diagnostic = heard.length > 100 ? heard.substring(heard.length - 100) : heard;
+        if (!_fullScreen || _fullScreenControlsVisible) {
+          setState(() => _lastRecognizedText = diagnostic);
+        } else {
+          _lastRecognizedText = diagnostic;
+        }
+      }
+      return;
+    }
 
     final confirmed = _tracker.accept(heard, isFinal: isFinal,
-      streamingPartials: _capture.streamingVoice,
-      allowRewind: _capture.streamingVoice && decision == VoiceScrollDecision.advance);
+      streamingPartials: streaming || _speech.running,
+      adjacentOnly: initialEvidence && decision == VoiceScrollDecision.highlightOnly,
+      allowRewind: streaming && decision == VoiceScrollDecision.advance);
     if (confirmed != null && confirmed < _readingCursor.confirmedIndex) {
       _undoIndex = _focusIndex;
       _readingCursor.seek(confirmed - 1);
@@ -417,6 +444,10 @@ class _TeleprompterPageState extends State<TeleprompterPage>
           _activeIndex = _readingCursor.confirmedIndex;
           _focusIndex = _readingCursor.nextIndex;
           _highlightIndex = _readingCursor.highlightedIndex;
+          if (_firstMatchedWord.isEmpty && _highlightIndex >= 0) {
+            _firstMatchedWord = _matcher.words[_highlightIndex].text;
+            _firstMatchMs = _voiceSessionClock.elapsedMilliseconds;
+          }
         }
       });
     }
@@ -451,6 +482,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     if (_voiceIsSpeaking != active) {
       setState(() => _voiceIsSpeaking = active);
     }
+    if (active && _highlightIndex >= 0) _scrollToFocus();
   }
 
   void _freezeAutomaticScroll() {
@@ -529,6 +561,11 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     _voiceScrollGate.reset();
     // Nova sessão de áudio: não confundir a primeira parcial com a fala antiga.
     _tracker.seek(_readingCursor.confirmedIndex);
+    _firstRawHypothesis = '';
+    _firstMatchedWord = '';
+    _firstRawMs = null;
+    _firstMatchMs = null;
+    _voiceSessionClock..reset()..start();
     _playPending = true;
     _broadcast();
     _pendingVoiceActivity = false;
@@ -542,6 +579,12 @@ class _TeleprompterPageState extends State<TeleprompterPage>
         if (_mode == PrompterMode.camera) {
           // Mesmo fluxo PCM usado para salvar a voz da gravação.
           await _capture.start(followVoice: true);
+        } else if (_preferNativeVoice) {
+          // Alternativa experimental para tablets com CPU mais lenta.
+          if (!await _speech.start(onDevice: true)) {
+            await _speech.stop();
+            throw StateError('Reconhecimento nativo local indisponível. Desative a opção nativa e tente novamente.');
+          }
         } else {
           // No leitor externo, prioriza o mesmo ASR offline de gravação.
           // Se o modelo não estiver instalado, usa API nativa como fallback.
@@ -798,12 +841,13 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     _broadcast();
     try {
       _enterFullScreen();
-      // O microfone é aberto apenas aqui (ou já estava aberto pela leitura).
-      await _capture.start(followVoice: _scrollMode == ScrollMode.voice);
-      if (!_playing) {
-        // Gravar inicia a leitura no modo escolhido (voz ou velocidade).
+      // No modo voz, prepare o cursor/gate ANTES de abrir o microfone.
+      // Assim a primeira fala não é descartada nem tem o VAD apagado.
+      if (!_playing && _scrollMode == ScrollMode.voice) {
         await _play();
       }
+      await _capture.start(followVoice: _scrollMode == ScrollMode.voice);
+      if (!_playing) await _play();
       final startBefore = _capture.sampleCount;
       await _camera!.startVideoRecording();
       // Estimativa entre chamada/retorno, não timestamps nativos exatos.
@@ -1113,6 +1157,13 @@ class _TeleprompterPageState extends State<TeleprompterPage>
         },
       );
 
+  String get _voiceDiagnostics {
+    final engine = _speech.running ? 'Reconhecimento nativo' : _capture.activeVoiceEngine;
+    final raw = _firstRawMs == null ? 'aguardando' : '$_firstRawMs ms: $_firstRawHypothesis';
+    final matched = _firstMatchMs == null ? 'aguardando' : '$_firstMatchMs ms: $_firstMatchedWord';
+    return '$engine\n1ª hipótese desde Iniciar: $raw\n1º destaque: $matched';
+  }
+
   Widget _readerControls() => Padding(
         padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
@@ -1145,6 +1196,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                     : 'Voz streaming pt-BR (fallback Whisper/nativo): $_voiceStatus',
                 maxLines: 2, textAlign: TextAlign.center,
                 style: Theme.of(context).textTheme.bodySmall),
+            if (_playing || _playPending || _firstRawHypothesis.isNotEmpty)
+              Text(_voiceDiagnostics, style: Theme.of(context).textTheme.labelSmall),
             if (_lastRecognizedText.isNotEmpty)
               Text('Ouvido: $_lastRecognizedText',
                 maxLines: 1, overflow: TextOverflow.ellipsis,
@@ -1238,6 +1291,9 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                     children: [
                       Text(_voiceStatus, maxLines: 2,
                           overflow: TextOverflow.ellipsis),
+                      if (_playing || _playPending || _firstRawHypothesis.isNotEmpty)
+                        Text(_voiceDiagnostics, maxLines: 5, overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 12)),
                       if (_lastRecognizedText.isNotEmpty)
                         Text('Ouvido: $_lastRecognizedText',
                             maxLines: 2,
@@ -1318,7 +1374,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                     const CircularProgressIndicator(),
                     const SizedBox(height: 14),
                     Text(_scrollMode == ScrollMode.voice
-                        ? 'Preparando reconhecimento de voz...'
+                        ? 'Preparando reconhecimento de voz... Aguarde o leitor ficar livre para falar.'
                         : 'Preparando leitura...'),
                   ]),
                 ),
@@ -1486,6 +1542,16 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                           onSelectionChanged: (value) =>
                               _changeScrollMode(value.first),
                         ),
+                        if (_scrollMode == ScrollMode.voice && _mode == PrompterMode.external)
+                          SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            dense: true,
+                            title: const Text('Voz nativa do aparelho (experimental)'),
+                            subtitle: const Text('Alternativa ao Nemotron; requer reconhecimento local em português.'),
+                            value: _preferNativeVoice,
+                            onChanged: _playing || _playPending || _recordingBusy
+                                ? null : (value) => setState(() => _preferNativeVoice = value),
+                          ),
                         const SizedBox(height: 10),
                         Row(children: [
                           Expanded(

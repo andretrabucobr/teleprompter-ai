@@ -49,6 +49,14 @@ class SharedAudioCapture {
 
   bool get running => _active;
   bool get streamingVoice => followingVoice && _recognizer is StreamingAsrWorker;
+  bool get streamingHasRecentSpeechEvidence {
+    final recognizer = _recognizer;
+    return followingVoice && recognizer is StreamingAsrWorker && recognizer.hasRecentSpeechEvidence;
+  }
+  String get activeVoiceEngine {
+    if (!followingVoice) return 'Inativo';
+    return _recognizer is StreamingAsrWorker ? 'Nemotron streaming' : 'Whisper offline';
+  }
   bool get followingVoice => _active && _transcribing;
   int get sampleCount => _writer?.sampleCount ?? 0;
   String? get currentWavPath => _writer?.path;

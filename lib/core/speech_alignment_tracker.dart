@@ -30,7 +30,7 @@ class SpeechAlignmentTracker {
 
   /// Retorna uma nova posição apenas quando o alinhamento é confiável.
   int? accept(String transcript, {bool isFinal = false, bool allowRewind = false,
-      bool streamingPartials = false}) {
+      bool streamingPartials = false, bool adjacentOnly = false}) {
     final spoken = ScriptMatcher.tokenize(transcript);
     final normalized = spoken.map((word) => word.normalized).join(' ');
     final previous = _lastHypothesis;
@@ -85,13 +85,10 @@ class SpeechAlignmentTracker {
           target++;
           consumed++;
         }
-        // A palavra seguinte pode estar incompleta (ex.: "Bom di").
-        // Confirme o prefixo exato agora, não espere a segunda palavra.
-        // Se o restante contradiz o roteiro, mantenha o alinhador robusto.
-        final incompleteTail = !isFinal && consumed == words.length - 1 &&
-            target + 1 < matcher.words.length &&
-            matcher.words[target + 1].normalized.startsWith(words[consumed]);
-        if (target > _index && (consumed == words.length || incompleteTail)) {
+        // O prefixo exato é evidência independente da hipótese seguinte.
+        // Ex.: "Bom jo" / "Bom dinheiro" não apagam o "Bom" já reconhecido.
+        // Não marcar o restante até que haja correspondência real.
+        if (target > _index) {
           _newUtterance = false;
           final result = _commit(target);
           _lastCommittedHypothesis = words.take(consumed).join(' ');
@@ -113,6 +110,7 @@ class SpeechAlignmentTracker {
         return null;
       }
     }
+    if (adjacentOnly) return null;
     if (spoken.length == 1 && spoken.single.normalized.length >= 3) {
       final adjacent = _index + 1;
       if (adjacent >= 0 && adjacent < matcher.words.length &&

@@ -13,6 +13,15 @@ void main() {
         VoiceScrollDecision.ignore);
   });
 
+  test('primeira evidência PCM permite destaque sem rolagem antes do VAD', () {
+    final gate = VoiceScrollGate();
+    expect(gate.decide(hasActivityDetector: true, initialSpeechEvidence: true, at: t0),
+        VoiceScrollDecision.highlightOnly);
+    expect(gate.isSpeaking, isFalse);
+    gate.onSpeechActivity(true, at: t0);
+    expect(gate.decide(hasActivityDetector: true, at: t0), VoiceScrollDecision.advance);
+  });
+
   test('ao falar o reconhecimento pode avançar; silêncio congela a tela', () {
     final gate = VoiceScrollGate();
     gate.onSpeechActivity(true, at: t0);

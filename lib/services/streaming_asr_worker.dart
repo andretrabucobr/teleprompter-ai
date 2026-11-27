@@ -142,6 +142,7 @@ class StreamingAsrWorker implements AsrWorker {
 
   final PcmFrameAccumulator _frames = PcmFrameAccumulator(frameBytes: 640); // 20 ms PCM
   final SpeechActivityGate _gate = SpeechActivityGate(minimumSpeechFrames: 2);
+  bool get hasRecentSpeechEvidence => _running && _following && _gate.hasRecentSpeechEvidence;
   ReceivePort? _events;
   StreamSubscription<dynamic>? _subscription;
   Isolate? _isolate;

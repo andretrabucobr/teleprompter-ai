@@ -3,6 +3,24 @@ import 'package:teleprompter_ai/core/script_matcher.dart';
 import 'package:teleprompter_ai/core/speech_alignment_tracker.dart';
 
 void main() {
+  test('primeira palavra não depende da hipótese errada da segunda', () {
+    final tracker = SpeechAlignmentTracker(ScriptMatcher('Bom dia hoje vamos gravar.'));
+    expect(tracker.accept('Bom dinheiro', streamingPartials: true), 0);
+    expect(tracker.accept('Bom dia', streamingPartials: true), 1);
+    expect(tracker.accept('Bom dia jovem', streamingPartials: true), isNull);
+    expect(tracker.accept('Bom dia hoje', streamingPartials: true), 2);
+  });
+  test('evidência inicial aceita apenas prefixo adjacente e não salta', () {
+    final tracker = SpeechAlignmentTracker(ScriptMatcher('A casa fica perto da praça.'));
+    expect(tracker.accept('perto da praça', streamingPartials: true, adjacentOnly: true), isNull);
+    expect(tracker.accept('A coisa', streamingPartials: true, adjacentOnly: true), 0);
+    expect(tracker.accept('A casa', streamingPartials: true), 1);
+  });
+  test('um prefixo falado incompleto nunca inventa a palavra inteira', () {
+    final tracker = SpeechAlignmentTracker(ScriptMatcher('Apresentação de hoje.'));
+    expect(tracker.accept('Apre', streamingPartials: true, adjacentOnly: true), isNull);
+    expect(tracker.accept('Apresentação', streamingPartials: true, adjacentOnly: true), 0);
+  });
   test('primeira palavra confirmada mesmo com segunda incompleta', () {
     final tracker = SpeechAlignmentTracker(ScriptMatcher('Bom dia vamos começar.'));
     expect(tracker.accept('Bom di', streamingPartials: true), 0);

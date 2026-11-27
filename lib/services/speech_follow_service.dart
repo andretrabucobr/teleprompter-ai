@@ -18,6 +18,7 @@ class SpeechFollowService {
   final stt.SpeechToText _engine = stt.SpeechToText();
   Timer? _retry;
   bool _initialized = false;
+  bool _onDevice = false;
   bool _wantsListening = false;
   bool _starting = false;
   bool _disposed = false;
@@ -27,8 +28,9 @@ class SpeechFollowService {
 
   bool get running => _wantsListening;
 
-  Future<bool> start() async {
+  Future<bool> start({bool onDevice = false}) async {
     if (_disposed) return false;
+    _onDevice = onDevice;
     _wantsListening = true;
     if (!_initialized) {
       final ready = await _engine.initialize(
@@ -81,6 +83,7 @@ class SpeechFollowService {
         },
         listenOptions: stt.SpeechListenOptions(
           partialResults: true,
+          onDevice: _onDevice,
           listenMode: stt.ListenMode.dictation,
           localeId: _localeId,
           listenFor: const Duration(seconds: 45),
@@ -98,7 +101,7 @@ class SpeechFollowService {
   void _scheduleRestart() {
     if (_disposed || !_wantsListening) return;
     _retry?.cancel();
-    _retry = Timer(const Duration(milliseconds: 700), () {
+    _retry = Timer(Duration(milliseconds: _onDevice ? 250 : 700), () {
       if (!_engine.isListening && !_starting && !_disposed) {
         _listen();
       }

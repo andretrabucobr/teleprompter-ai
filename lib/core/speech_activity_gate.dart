@@ -33,6 +33,7 @@ class SpeechActivityGate {
 
   /// Atividade atual com 0,4 s de tolerância a pequenas pausas entre sílabas.
   /// Não é VAD neural: o resultado depende do ruído do ambiente.
+  bool get hasRecentSpeechEvidence => _frameCount - _lastSpeechFrame <= 20;
   bool get currentlySpeaking => _speechFrames >= minimumSpeechFrames &&
       (_frameCount - _lastSpeechFrame) <= 20;
 

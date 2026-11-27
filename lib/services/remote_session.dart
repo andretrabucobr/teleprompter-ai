@@ -2,19 +2,25 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
+import 'package:flutter/services.dart';
 import 'remote_web_page.dart';
 
 /// MVP para Wi-Fi local confiável. NÃO criptografa o tráfego WebSocket.
 /// A publicação requer revisão de segurança e um canal autenticado/criptografado.
 const remoteProtocolVersion = 1;
+const remotePreferredPort = 8765;
+const _lanNameChannel = MethodChannel('flowtext/lan_name');
 
 typedef RemoteCommandHandler = Future<void> Function(String command, dynamic value);
 
 class PairingInfo {
-  const PairingInfo(this.host, this.port, this.pin);
+  const PairingInfo(this.host, this.port, this.pin, {this.webHost});
   final String host;
   final int port;
   final String pin;
+  final String? webHost;
+  String get webUrl => Uri(scheme: 'http', host: webHost ?? host, port: port, path: '/').toString();
+  String get fallbackWebUrl => Uri(scheme: 'http', host: host, port: port, path: '/').toString();
 
   String get qrData => Uri(
         scheme: 'teleprompter-ai',
@@ -54,19 +60,24 @@ class RemoteHost {
   String? _controllerId;
   Future<void> _commandQueue = Future<void>.value();
   String? _localIp;
+  String? _webHost;
   int _invalidAttempts = 0;
 
   bool get isRunning => _server != null;
   bool get hasController => _controller != null;
   PairingInfo? get pairing => _server == null || _pin == null || _localIp == null
       ? null
-      : PairingInfo(_localIp!, _server!.port, _pin!);
+      : PairingInfo(_localIp!, _server!.port, _pin!, webHost: _webHost);
 
   Future<PairingInfo> start() async {
     if (pairing != null) return pairing!;
     final ip = await _findLocalIpv4();
     if (ip == null) throw StateError('Conecte o aparelho a uma rede Wi-Fi local.');
-    _server = await HttpServer.bind(InternetAddress.anyIPv4, 0);
+    try {
+      _server = await HttpServer.bind(InternetAddress.anyIPv4, remotePreferredPort);
+    } on SocketException {
+      _server = await HttpServer.bind(InternetAddress.anyIPv4, 0);
+    }
     _localIp = ip;
     _pin = (100000 + Random.secure().nextInt(900000)).toString();
     _invalidAttempts = 0;
@@ -95,6 +106,17 @@ class RemoteHost {
         } catch (_) { /* a negociação pode ter encerrado a resposta */ }
       }
     });
+    if (Platform.isAndroid) {
+      try {
+        final name = await _lanNameChannel.invokeMethod<String>('start',
+          {'ip': ip, 'port': _server!.port}).timeout(const Duration(seconds: 8));
+        if (name != null && RegExp(r'^[a-zA-Z0-9-]+\.local\.?$').hasMatch(name)) {
+          _webHost = name.endsWith('.') ? name.substring(0, name.length - 1) : name;
+        }
+      } catch (_) {
+        _webHost = null;
+      }
+    }
     return pairing!;
   }
 
@@ -130,7 +152,7 @@ class RemoteHost {
     });
     socket.pingInterval = const Duration(seconds: 10);
     socket.listen((data) async {
-      if (data is! String || data.length > 8192) {
+      if (data is! String || data.length > (authorized ? 650000 : 8192)) {
         await socket.close(WebSocketStatus.policyViolation);
         return;
       }
@@ -149,6 +171,10 @@ class RemoteHost {
         return;
       }
       final type = command['type'];
+      if (data.length > 8192 && type != 'set_script') {
+        await socket.close(WebSocketStatus.policyViolation);
+        return;
+      }
       if (!authorized) {
         final clientId = command['clientId'];
         if (type != 'pair' || _invalidAttempts >= 15 || command['pin'] != _pin || _pin == null) {
@@ -180,7 +206,7 @@ class RemoteHost {
       if (type is! String || !const {
         'play', 'pause', 'reset', 'seek', 'set_speed', 'set_font_size',
         'set_mirror', 'record_start', 'record_stop', 'seek_word',
-        'seek_paragraph', 'undo_seek', 'set_scroll_mode',
+        'seek_paragraph', 'undo_seek', 'set_scroll_mode', 'set_script',
       }.contains(type)) {
         _send(socket, {'type': 'ack', 'id': command['id'], 'ok': false,
           'message': 'Comando desconhecido'});
@@ -232,6 +258,10 @@ class RemoteHost {
     _pin = null;
     _controllerId = null;
     _localIp = null;
+    _webHost = null;
+    if (Platform.isAndroid) {
+      try { await _lanNameChannel.invokeMethod<void>('stop').timeout(const Duration(seconds: 3)); } catch (_) {}
+    }
     onConnection?.call(false);
     if (peer != null) await peer.close();
     await _server?.close(force: true);

@@ -69,6 +69,14 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   List<CameraDescription> _cameras = [];
   Timer? _ticker;
   Timer? _saveTimer;
+  Future<void> _scriptSaveQueue = Future<void>.value();
+  String _lastScriptText = ScriptRepository.sample;
+  int _scriptRevision = 0;
+  bool _scriptLoaded = false;
+  bool _remoteSavingScript = false;
+  List<List<int>>? _cachedWordOffsets;
+  int _lastDiagnosticAt = 0;
+  double? _voiceDestination;
   Timer? _fullScreenControlsTimer;
   Future<void> _wakeLockSequence = Future<void>.value();
   bool _foreground = true;
@@ -145,10 +153,69 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       }
     } catch (e) {
       if (mounted) _notice('Não foi possível abrir o roteiro salvo: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _scriptLoaded = true);
+        _broadcast();
+      }
+    }
+  }
+
+  Future<void> _persistScript(String text) {
+    final next = _scriptSaveQueue.catchError((Object _) {}).then((_) => _repository.save(text));
+    _scriptSaveQueue = next;
+    return next;
+  }
+
+  bool get _canSaveRemoteScript => mounted && _scriptLoaded && !_playing &&
+      !_playPending && !_recording && !_recordingBusy && !_remoteSavingScript;
+
+  Future<void> _saveRemoteScript(dynamic value) async {
+    if (!_canSaveRemoteScript) {
+      throw StateError('Pause a leitura e finalize a gravação antes de salvar o roteiro.');
+    }
+    if (value is! Map<String, dynamic> || value['text'] is! String ||
+        value['revision'] is! int) {
+      throw StateError('Roteiro ou revisão inválidos.');
+    }
+    final text = value['text'] as String;
+    final revision = value['revision'] as int;
+    if (text.trim().isEmpty || text.length > 100000) {
+      throw StateError('O roteiro deve ter entre 1 e 100.000 caracteres.');
+    }
+    if (revision != _scriptRevision) {
+      throw StateError('O roteiro foi alterado no aparelho. Recarregue o texto antes de salvar.');
+    }
+    _saveTimer?.cancel();
+    setState(() => _remoteSavingScript = true);
+    _broadcast();
+    try {
+      await _persistScript(text);
+      if (!mounted) return;
+      if (revision != _scriptRevision) {
+        await _persistScript(_script.text);
+        throw StateError('O roteiro foi alterado durante o salvamento. Recarregue o texto.');
+      }
+      if (text != _script.text) {
+        _script.text = text;
+        if (_scroll.hasClients) _scroll.jumpTo(0);
+        _scrollToFocus(force: true);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _remoteSavingScript = false);
+        _broadcast();
+      }
     }
   }
 
   void _scriptChanged() {
+    if (_script.text == _lastScriptText) return;
+    _lastScriptText = _script.text;
+    _scriptRevision++;
+    _cachedWordOffsets = null;
+    _voiceScrollEpoch++;
+    _voiceDestination = null;
     _undoIndex = null;
     _matcher = ScriptMatcher(_script.text);
     _navigation = ReadingNavigation(_script.text, _matcher.words);
@@ -164,9 +231,10 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     _lastRecognizedText = '';
     _broadcast();
     _saveTimer?.cancel();
+    if (_remoteSavingScript) return;
     _saveTimer = Timer(const Duration(milliseconds: 600), () async {
       try {
-        await _repository.save(_script.text);
+        await _persistScript(_script.text);
       } catch (e) {
         if (mounted) _notice('Falha ao salvar roteiro: $e');
       }
@@ -287,7 +355,9 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   Map<String, dynamic> _snapshot() => {
         'playing': _playing,
         'script': _script.text,
-        'wordOffsets': [for (final word in _matcher.words) [word.start, word.end]],
+        'wordOffsets': _cachedWordOffsets ??= [for (final word in _matcher.words) [word.start, word.end]],
+        'scriptRevision': _scriptRevision,
+        'scriptEditable': _canSaveRemoteScript,
         'highlightIndex': _highlightIndex,
         'allowRemoteRecording': _allowRemoteRecording,
         'undoAvailable': _undoIndex != null,
@@ -327,15 +397,28 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       _voiceScrollEpoch++;
     }
     final changed = confirmed != null && _readingCursor.confirm(confirmed);
-    setState(() {
-      _lastRecognizedText = heard.length > 100
-          ? heard.substring(heard.length - 100) : heard;
-      if (changed) {
-        _activeIndex = _readingCursor.confirmedIndex;
-        _focusIndex = _readingCursor.nextIndex;
-        _highlightIndex = _readingCursor.highlightedIndex;
-      }
-    });
+    // O diagnóstico não precisa repintar o leitor a cada parcial repetida.
+    // O cursor visual, por outro lado, é atualizado imediatamente quando muda.
+    final diagnostic = heard.length > 100
+        ? heard.substring(heard.length - 100) : heard;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final showDiagnostic = !_fullScreen || _fullScreenControlsVisible;
+    final refreshDiagnostic = showDiagnostic &&
+        diagnostic != _lastRecognizedText && now - _lastDiagnosticAt >= 200;
+    if (!showDiagnostic) _lastRecognizedText = diagnostic;
+    if (changed || refreshDiagnostic) {
+      setState(() {
+        if (refreshDiagnostic) {
+          _lastDiagnosticAt = now;
+          _lastRecognizedText = diagnostic;
+        }
+        if (changed) {
+          _activeIndex = _readingCursor.confirmedIndex;
+          _focusIndex = _readingCursor.nextIndex;
+          _highlightIndex = _readingCursor.highlightedIndex;
+        }
+      });
+    }
 
     if (changed) {
       _voiceScrollGate.onConfirmed(decision);
@@ -370,6 +453,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   }
 
   void _freezeAutomaticScroll() {
+    _voiceDestination = null;
     if (_scroll.hasClients) _scroll.jumpTo(_scroll.offset);
   }
 
@@ -405,6 +489,11 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       if (boxes.isEmpty) return;
       final destination = (boxes.first.top - _viewerHeight * .075)
           .clamp(0.0, _scroll.position.maxScrollExtent).toDouble();
+      // Palavras da mesma linha compartilham a posição vertical. Não reinicie
+      // a animação se a linha de destino não mudou.
+      if (!force && _scrollMode == ScrollMode.voice &&
+          _voiceDestination != null && (_voiceDestination! - destination).abs() < 1.5) return;
+      _voiceDestination = destination;
       if ((_scroll.offset - destination).abs() < 1.5) return;
       _scroll.animateTo(destination, duration: const Duration(milliseconds: 90), curve: Curves.easeOutCubic);
     });
@@ -428,6 +517,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   }
 
   Future<void> _play() async {
+    if (_remoteSavingScript) throw StateError('Aguarde o salvamento do roteiro.');
     if (_playing) {
       _enterFullScreen();
       return;
@@ -437,6 +527,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     _enterFullScreen();
     _voiceScrollGate.reset();
     _playPending = true;
+    _broadcast();
     _pendingVoiceActivity = false;
     if (mounted) setState(() {});
     final generation = ++_playGeneration;
@@ -495,6 +586,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     } finally {
       _playPending = false;
       _syncScreenAwake();
+      _broadcast();
       if (mounted) setState(() {});
     }
   }
@@ -690,12 +782,14 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   }
 
   Future<void> _startRecording() async {
+    if (_remoteSavingScript) throw StateError('Aguarde o salvamento do roteiro.');
     if (_recordingBusy || _recording) return;
     if (_mode != PrompterMode.camera || _camera?.value.isInitialized != true) {
       _notice('Abra o modo Câmera e conceda as permissões.');
       throw StateError('Câmera não preparada.');
     }
     _recordingBusy = true;
+    _broadcast();
     try {
       _enterFullScreen();
       // O microfone é aberto apenas aqui (ou já estava aberto pela leitura).
@@ -721,6 +815,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     } finally {
       _recordingBusy = false;
       _syncScreenAwake();
+      _broadcast();
     }
   }
 
@@ -815,6 +910,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
         await _pause();
       case 'reset':
         await _restart();
+      case 'set_script':
+        await _saveRemoteScript(value);
       case 'seek':
         if (value is! num) throw StateError('Posição inválida.');
         _seek(value.toInt().clamp(-100, 100).toInt());
@@ -882,9 +979,30 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                   child: QrImageView(data: pairing.qrData, size: 190),
                 ),
                 const SizedBox(height: 14),
-                SelectableText('IP: ${pairing.host}   Porta: ${pairing.port}'),
-                const Text('No computador, abra este endereço no navegador:'),
-                SelectableText('http://${pairing.host}:${pairing.port}/'),
+                const Text('No computador, abra o endereço abaixo e informe o PIN:'),
+                const SizedBox(height: 8),
+                SelectableText(pairing.webUrl,
+                    style: Theme.of(context).textTheme.titleMedium),
+                OutlinedButton.icon(
+                  icon: const Icon(Icons.copy),
+                  label: const Text('Copiar endereço web'),
+                  onPressed: () async {
+                    await Clipboard.setData(ClipboardData(text: pairing.webUrl));
+                    if (mounted) _notice('Endereço copiado.');
+                  },
+                ),
+                if (pairing.webHost != null) ...[
+                  const Text('Salve este endereço nos favoritos. Se a rede bloquear nomes .local, use o endereço alternativo.'),
+                  SelectableText(pairing.fallbackWebUrl),
+                ] else
+                  const Text('A porta é fixa quando disponível. Para manter o endereço em todas as sessões, reserve o IP no roteador.'),
+                const SizedBox(height: 8),
+                const Text('QR para abrir no navegador (sem PIN):'),
+                Container(
+                  color: Colors.white,
+                  padding: const EdgeInsets.all(8),
+                  child: QrImageView(data: pairing.fallbackWebUrl, size: 132),
+                ),
                 SelectableText('PIN: ${pairing.pin}',
                     style: Theme.of(context).textTheme.headlineSmall),
                 const SizedBox(height: 14),
@@ -931,7 +1049,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     final word = _matcher.words[index];
     // Apenas cor: não altera largura, quebra de linha ou geometria a cada palavra.
     return [
-      TextSpan(text: text.substring(0, word.start)),
+      TextSpan(text: text.substring(0, word.start),
+        style: const TextStyle(color: Color(0xFF9CA3AF))),
       TextSpan(text: text.substring(word.start, word.end),
         style: const TextStyle(color: AppColors.onBrand, backgroundColor: AppColors.brand)),
       TextSpan(text: text.substring(word.end)),
@@ -961,10 +1080,12 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                 padding: EdgeInsets.fromLTRB(24, _viewerHeight * .3, 24, _viewerHeight * .75),
                 child: GestureDetector(
                   onLongPressStart: (details) => _selectAt(details.localPosition),
-                  child: Text.rich(
-                    TextSpan(style: _readingStyle(), children: _styledText()),
-                    key: _readerKey,
-                    textAlign: TextAlign.center,
+                  child: RepaintBoundary(
+                    child: Text.rich(
+                      TextSpan(style: _readingStyle(), children: _styledText()),
+                      key: _readerKey,
+                      textAlign: TextAlign.center,
+                    ),
                   ),
                 ),
               ),
@@ -1325,6 +1446,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                             padding: const EdgeInsets.all(12),
                             child: TextField(
                               controller: _script,
+                              readOnly: _remoteSavingScript,
                               expands: true,
                               maxLines: null,
                               minLines: null,

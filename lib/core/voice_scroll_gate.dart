@@ -46,7 +46,7 @@ class VoiceScrollGate {
     if (_speaking) return VoiceScrollDecision.advance;
     // A primeira hipótese alinhada não precisa esperar o VAD estabilizar.
     // Continua sem mover a tela; o chamador exige coincidência adjacente.
-    if (!_hasSpoken && initialSpeechEvidence) return VoiceScrollDecision.highlightOnly;
+    if (initialSpeechEvidence && !_usedTrailingHighlight) return VoiceScrollDecision.highlightOnly;
     if (!_hasSpoken || _usedTrailingHighlight || _lastStoppedAt == null) {
       return VoiceScrollDecision.ignore;
     }

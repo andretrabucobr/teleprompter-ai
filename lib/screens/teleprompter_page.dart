@@ -13,7 +13,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import '../core/script_matcher.dart';
 import '../core/reading_navigation.dart';
 import '../core/app_colors.dart';
-import '../core/last_spoken_word.dart';
+import '../widgets/flow_reader_text.dart';
 import '../core/confirmed_word_cursor.dart';
 import '../core/screen_awake_policy.dart';
 import '../core/voice_scroll_gate.dart';
@@ -116,7 +116,9 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   double _viewerHeight = 400;
   int _activeIndex = -1; // última palavra CONFIRMADA pelo reconhecimento
   int _focusIndex = 0; // próxima palavra a ler, sem previsão temporal
-  int _highlightIndex = -1; // apenas a última palavra confirmada pelo ASR
+  final ValueNotifier<int> _highlight = ValueNotifier<int>(-1);
+  int get _highlightIndex => _highlight.value;
+  set _highlightIndex(int value) => _highlight.value = value;
   final VoiceScrollGate _voiceScrollGate = VoiceScrollGate();
   bool _voiceIsSpeaking = false;
   int _voiceScrollEpoch = 0;
@@ -395,13 +397,11 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     // Registra a hipótese bruta ANTES do gate: permite distinguir atraso do
     // motor de um erro de alinhamento sem armazenar áudio ou enviar dados.
     if (_firstRawHypothesis.isEmpty) {
-      setState(() {
-        _firstRawHypothesis = heard.length > 100 ? heard.substring(0, 100) : heard;
-        _firstRawMs = _voiceSessionClock.elapsedMilliseconds;
-      });
+      _firstRawHypothesis = heard.length > 100 ? heard.substring(0, 100) : heard;
+      _firstRawMs = _voiceSessionClock.elapsedMilliseconds;
     }
     final streaming = _capture.streamingVoice;
-    final initialEvidence = _highlightIndex < 0 && streaming &&
+    final initialEvidence = streaming &&
         _capture.streamingHasRecentSpeechEvidence && !_voiceScrollGate.isSpeaking;
     final decision = _voiceScrollGate.decide(
       hasActivityDetector: !_speech.running,
@@ -422,7 +422,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
 
     final confirmed = _tracker.accept(heard, isFinal: isFinal,
       streamingPartials: streaming || _speech.running,
-      adjacentOnly: initialEvidence && decision == VoiceScrollDecision.highlightOnly,
+      adjacentOnly: decision == VoiceScrollDecision.highlightOnly,
       allowRewind: streaming && decision == VoiceScrollDecision.advance);
     if (confirmed != null && confirmed < _readingCursor.confirmedIndex) {
       _undoIndex = _focusIndex;
@@ -439,20 +439,23 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     final refreshDiagnostic = showDiagnostic &&
         diagnostic != _lastRecognizedText && now - _lastDiagnosticAt >= 200;
     if (!showDiagnostic) _lastRecognizedText = diagnostic;
-    if (changed || refreshDiagnostic) {
+    if (changed) {
+      _activeIndex = _readingCursor.confirmedIndex;
+      _focusIndex = _readingCursor.nextIndex;
+      _highlightIndex = _readingCursor.highlightedIndex;
+      if (_firstMatchedWord.isEmpty && _highlightIndex >= 0) {
+        _firstMatchedWord = _matcher.words[_highlightIndex].text;
+        _firstMatchMs = _voiceSessionClock.elapsedMilliseconds;
+      }
+    }
+    // O cursor já solicitou repaint diretamente; não reconstrua a câmera
+    // e o roteiro inteiro a cada palavra. Controles visíveis são atualizados
+    // separadamente para manter os indicadores e diagnóstico.
+    if (showDiagnostic && (refreshDiagnostic || changed)) {
       setState(() {
         if (refreshDiagnostic) {
           _lastDiagnosticAt = now;
           _lastRecognizedText = diagnostic;
-        }
-        if (changed) {
-          _activeIndex = _readingCursor.confirmedIndex;
-          _focusIndex = _readingCursor.nextIndex;
-          _highlightIndex = _readingCursor.highlightedIndex;
-          if (_firstMatchedWord.isEmpty && _highlightIndex >= 0) {
-            _firstMatchedWord = _matcher.words[_highlightIndex].text;
-            _firstMatchMs = _voiceSessionClock.elapsedMilliseconds;
-          }
         }
       });
     }
@@ -485,7 +488,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       }
     }
     if (_voiceIsSpeaking != active) {
-      setState(() => _voiceIsSpeaking = active);
+      _voiceIsSpeaking = active;
+      if (!_fullScreen || _fullScreenControlsVisible) setState(() {});
     }
     if (active && _highlightIndex >= 0) _scrollToFocus();
   }
@@ -522,7 +526,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       if (targetIndex >= _matcher.words.length) return;
       final word = _matcher.words[targetIndex];
       final render = _readerKey.currentContext?.findRenderObject();
-      if (render is! RenderParagraph || !render.hasSize || targetIndex >= _matcher.words.length) return;
+      if (render is! FlowReaderRender || !render.hasSize || targetIndex >= _matcher.words.length) return;
       final boxes = render.getBoxesForSelection(TextSelection(baseOffset: word.start, extentOffset: word.end));
       if (boxes.isEmpty) return;
       final destination = (boxes.first.top - _viewerHeight * .075)
@@ -738,7 +742,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
 
   int _wordAtReadingLine() {
     final render = _readerKey.currentContext?.findRenderObject();
-    if (render is! RenderParagraph || !render.hasSize || !_scroll.hasClients) return _focusIndex;
+    if (render is! FlowReaderRender || !render.hasSize || !_scroll.hasClients) return _focusIndex;
     final offset = render.getPositionForOffset(Offset(
       1, (_scroll.offset + _viewerHeight * .075).clamp(0.0, render.size.height).toDouble(),
     )).offset;
@@ -810,7 +814,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
 
   void _selectAt(Offset localPosition) {
     final render = _readerKey.currentContext?.findRenderObject();
-    if (render is RenderParagraph && render.hasSize) {
+    if (render is FlowReaderRender && render.hasSize) {
       _seekTo(_navigation.atOffset(render.getPositionForOffset(localPosition).offset));
     }
   }
@@ -1140,24 +1144,6 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     }
   }
 
-  List<InlineSpan> _styledText() {
-    final text = _script.text;
-    final index = _highlightIndex;
-    if (index < 0 || index >= _matcher.words.length ||
-        !isLastSpokenWord(wordIndex: index, confirmedIndex: index, voiceMode: _scrollMode == ScrollMode.voice)) {
-      return [TextSpan(text: text)];
-    }
-    final word = _matcher.words[index];
-    // Apenas cor: não altera largura, quebra de linha ou geometria a cada palavra.
-    return [
-      TextSpan(text: text.substring(0, word.start),
-        style: const TextStyle(color: Color(0xFF9CA3AF))),
-      TextSpan(text: text.substring(word.start, word.end),
-        style: const TextStyle(color: AppColors.onBrand, backgroundColor: AppColors.brand)),
-      TextSpan(text: text.substring(word.end)),
-    ];
-  }
-
   Widget _reader() => LayoutBuilder(
         builder: (context, constraints) {
           _viewerWidth = constraints.maxWidth;
@@ -1181,12 +1167,12 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                 padding: EdgeInsets.fromLTRB(24, _viewerHeight * .3, 24, _viewerHeight * .75),
                 child: GestureDetector(
                   onLongPressStart: (details) => _selectAt(details.localPosition),
-                  child: RepaintBoundary(
-                    child: Text.rich(
-                      TextSpan(style: _readingStyle(), children: _styledText()),
-                      key: _readerKey,
-                      textAlign: TextAlign.center,
-                    ),
+                  child: FlowReaderText(
+                    key: _readerKey,
+                    text: _script.text,
+                    words: _matcher.words,
+                    style: _readingStyle(),
+                    highlight: _highlight,
                   ),
                 ),
               ),
@@ -1474,6 +1460,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     _camera?.dispose();
     _script.dispose();
     _scroll.dispose();
+    _highlight.dispose();
     super.dispose();
   }
 

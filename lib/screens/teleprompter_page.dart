@@ -17,7 +17,7 @@ import '../widgets/flow_reader_text.dart';
 import '../core/confirmed_word_cursor.dart';
 import '../core/screen_awake_policy.dart';
 import '../core/voice_scroll_gate.dart';
-import '../core/speech_alignment_tracker.dart';
+import '../core/contextual_script_tracker.dart';
 import '../services/remote_session.dart';
 import '../services/shared_audio_capture.dart';
 import '../services/video_audio_composer.dart';
@@ -64,7 +64,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     },
   );
   ScriptMatcher _matcher = ScriptMatcher(ScriptRepository.sample);
-  late SpeechAlignmentTracker _tracker = SpeechAlignmentTracker(_matcher);
+  late ContextualScriptTracker _tracker = ContextualScriptTracker(_script.text);
   late ConfirmedWordCursor _readingCursor = ConfirmedWordCursor(
     wordCount: _matcher.words.length,
   );
@@ -154,7 +154,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
           _fontSize = savedFont;
           _matcher = ScriptMatcher(content);
           _navigation = ReadingNavigation(content, _matcher.words);
-          _tracker = SpeechAlignmentTracker(_matcher);
+          _tracker = ContextualScriptTracker(_script.text);
           _readingCursor = ConfirmedWordCursor(
             wordCount: _matcher.words.length,
           );
@@ -232,7 +232,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     _undoIndex = null;
     _matcher = ScriptMatcher(_script.text);
     _navigation = ReadingNavigation(_script.text, _matcher.words);
-    _tracker = SpeechAlignmentTracker(_matcher);
+    _tracker = ContextualScriptTracker(_script.text);
     _readingCursor = ConfirmedWordCursor(
       wordCount: _matcher.words.length,
     );
@@ -408,6 +408,13 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       initialSpeechEvidence: initialEvidence,
     );
     if (decision == VoiceScrollDecision.ignore) {
+      if (isFinal && streaming) {
+        _tracker = ContextualScriptTracker(_script.text,
+          anchor: _highlightIndex >= 0 ? _highlightIndex : _activeIndex,
+          highlight: _highlightIndex);
+        _activeIndex = _tracker.state.confirmed;
+        _readingCursor.seek(_activeIndex);
+      }
       // O painel diagnóstico deve continuar mostrando o que o ASR ouviu.
       if (_lastRecognizedText != heard) {
         final diagnostic = heard.length > 100 ? heard.substring(heard.length - 100) : heard;
@@ -420,16 +427,14 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       return;
     }
 
-    final confirmed = _tracker.accept(heard, isFinal: isFinal,
-      streamingPartials: streaming || _speech.running,
+    final update = _tracker.accept(heard, isFinal: isFinal,
       adjacentOnly: decision == VoiceScrollDecision.highlightOnly,
       allowRewind: streaming && decision == VoiceScrollDecision.advance);
-    if (confirmed != null && confirmed < _readingCursor.confirmedIndex) {
-      _undoIndex = _focusIndex;
-      _readingCursor.seek(confirmed - 1);
-      _voiceScrollEpoch++;
+    final changed = update.highlight != _highlightIndex;
+    if (update.confirmed != _readingCursor.confirmedIndex) {
+      _readingCursor.seek(update.confirmed);
     }
-    final changed = confirmed != null && _readingCursor.confirm(confirmed);
+    _activeIndex = update.confirmed;
     // O diagnóstico não precisa repintar o leitor a cada parcial repetida.
     // O cursor visual, por outro lado, é atualizado imediatamente quando muda.
     final diagnostic = heard.length > 100
@@ -440,9 +445,12 @@ class _TeleprompterPageState extends State<TeleprompterPage>
         diagnostic != _lastRecognizedText && now - _lastDiagnosticAt >= 200;
     if (!showDiagnostic) _lastRecognizedText = diagnostic;
     if (changed) {
-      _activeIndex = _readingCursor.confirmedIndex;
-      _focusIndex = _readingCursor.nextIndex;
-      _highlightIndex = _readingCursor.highlightedIndex;
+      if (update.display < _focusIndex - 1) {
+        _undoIndex = _focusIndex;
+        _voiceScrollEpoch++;
+      }
+      _focusIndex = (update.display + 1).clamp(0, _matcher.words.length - 1).toInt();
+      _highlightIndex = update.highlight;
       if (_firstMatchedWord.isEmpty && _highlightIndex >= 0) {
         _firstMatchedWord = _matcher.words[_highlightIndex].text;
         _firstMatchMs = _voiceSessionClock.elapsedMilliseconds;
@@ -577,7 +585,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       }
       await _speech.stop();
       if (!_sameVoiceSession(generation)) return;
-      _tracker.seek(_readingCursor.confirmedIndex);
+      _tracker = ContextualScriptTracker(_script.text, anchor: _activeIndex, highlight: _highlightIndex);
     }
     if (!_sameVoiceSession(generation)) return;
     await _capture.start(followVoice: true, saveAudio: false);
@@ -592,7 +600,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       if (mounted) setState(() => _voiceStatus = 'Reconectando reconhecimento de voz...');
       await _speech.stop();
       if (!_sameVoiceSession(generation) || !_playing) return;
-      _tracker.seek(_readingCursor.confirmedIndex);
+      _tracker = ContextualScriptTracker(_script.text, anchor: _activeIndex, highlight: _highlightIndex);
       _voiceScrollGate.reset();
       _voiceScrollEpoch++;
       _freezeAutomaticScroll();
@@ -625,7 +633,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     _enterFullScreen();
     _voiceScrollGate.reset();
     // Nova sessão de áudio: não confundir a primeira parcial com a fala antiga.
-    _tracker.seek(_readingCursor.confirmedIndex);
+    _tracker = ContextualScriptTracker(_script.text, anchor: _activeIndex, highlight: _highlightIndex);
     _nativeUnavailableThisSession = false;
     _firstRawHypothesis = '';
     _firstMatchedWord = '';
@@ -662,7 +670,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
           _playing = true;
           if (_scrollMode == ScrollMode.voice) {
             _voiceIsSpeaking = _pendingVoiceActivity;
-            _focusIndex = _readingCursor.nextIndex;
+            _focusIndex = (_tracker.state.display + 1).clamp(0, _matcher.words.length - 1).toInt();
           }
         });
         _ticker?.cancel();
@@ -728,7 +736,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     await _pause();
     _undoIndex = null;
     if (_scroll.hasClients) _scroll.jumpTo(0);
-    _tracker.seek(-1);
+    _tracker = ContextualScriptTracker(_script.text);
     _readingCursor.seek(-1);
     if (mounted) {
       setState(() {
@@ -774,7 +782,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     _voiceScrollGate.reset();
     _voiceIsSpeaking = false;
     final anchor = _scrollMode == ScrollMode.voice ? next - 1 : next;
-    _tracker.seek(anchor);
+    _tracker = ContextualScriptTracker(_script.text, anchor: anchor);
     _readingCursor.seek(anchor);
     setState(() {
       _activeIndex = anchor;

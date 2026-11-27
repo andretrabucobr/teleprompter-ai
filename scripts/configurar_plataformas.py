@@ -205,13 +205,6 @@ def configurar_nome_local_android() -> None:
         if '// FlowText mDNS' not in content:
             content += '\n// FlowText mDNS\ndependencies { implementation "org.jmdns:jmdns:3.5.10" }\n'
             gradle.write_text(content, encoding='utf-8')
-    content = gradle.read_text(encoding='utf-8')
-    if '// FlowText Vosk' not in content:
-        if gradle.suffix == '.kts':
-            content += '\n// FlowText Vosk\ndependencies { implementation("com.alphacephei:vosk-android:0.3.75") }\n'
-        else:
-            content += '\n// FlowText Vosk\ndependencies { implementation "com.alphacephei:vosk-android:0.3.75" }\n'
-        gradle.write_text(content, encoding='utf-8')
 
 
 def configurar_ios() -> None:

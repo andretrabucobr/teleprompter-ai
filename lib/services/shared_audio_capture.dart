@@ -9,7 +9,6 @@ import 'wav_pcm_writer.dart';
 import 'asr_worker.dart';
 import 'streaming_asr_worker.dart';
 import 'whisper_asr_worker.dart';
-import 'vosk_asr_worker.dart';
 
 class CapturedAudio {
   const CapturedAudio({
@@ -49,17 +48,18 @@ class SharedAudioCapture {
   Object? _streamError;
 
   bool get running => _active;
-  bool get streamingVoice => followingVoice && (_recognizer is StreamingAsrWorker || _recognizer is VoskAsrWorker);
+  bool get streamingVoice => followingVoice && _recognizer is StreamingAsrWorker;
   bool get streamingHasRecentSpeechEvidence {
     final recognizer = _recognizer;
-    if (!followingVoice) return false;
-    if (recognizer is VoskAsrWorker) return recognizer.hasRecentSpeechEvidence;
-    return recognizer is StreamingAsrWorker && recognizer.hasRecentSpeechEvidence;
+    return followingVoice && recognizer is StreamingAsrWorker && recognizer.hasRecentSpeechEvidence;
   }
   String get activeVoiceEngine {
     if (!followingVoice) return 'Inativo';
-    if (_recognizer is VoskAsrWorker) return 'Vosk pt-BR';
     return _recognizer is StreamingAsrWorker ? 'Nemotron streaming' : 'Whisper offline';
+  }
+  String get voiceMetrics {
+    final recognizer = _recognizer;
+    return recognizer is StreamingAsrWorker ? recognizer.metrics : '';
   }
   bool get followingVoice => _active && _transcribing;
   int get sampleCount => _writer?.sampleCount ?? 0;
@@ -100,20 +100,7 @@ class SharedAudioCapture {
       if (followVoice) {
         // Preferir hipóteses parciais de streaming quando presentes no build.
         // Se a inicialização não funcionar, usar Whisper sem perder a câmera.
-        if (Platform.isAndroid) {
-          final lightweight = VoskAsrWorker(
-            onText: onTranscript, onStatus: onStatus, onSpeechActivity: onSpeechActivity,
-          );
-          try {
-            await lightweight.start();
-            _recognizer = lightweight;
-            recognizerName = 'Vosk pt-BR';
-          } catch (error) {
-            try { await lightweight.stop(); } catch (_) {}
-            onStatus('Vosk indisponível: $error. Tentando modelo embarcado.');
-          }
-        }
-        if (_recognizer == null && await StreamingModelFiles.isBundled()) {
+        if (await StreamingModelFiles.isBundled()) {
           final online = StreamingAsrWorker(
             onText: onTranscript,
             onStatus: onStatus,
@@ -150,7 +137,7 @@ class SharedAudioCapture {
         sampleRate: sampleRate,
         numChannels: 1,
         // Solicita callbacks menores do microfone; o dispositivo pode ajustar.
-        streamBufferSize: 1600,
+        streamBufferSize: 3200,
         autoGain: false,
         echoCancel: false,
         noiseSuppress: false,

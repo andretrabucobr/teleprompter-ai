@@ -140,7 +140,7 @@ class StreamingAsrWorker implements AsrWorker {
   final void Function(String status) onStatus;
   final void Function(bool speaking)? onSpeechActivity;
 
-  final PcmFrameAccumulator _frames = PcmFrameAccumulator(frameBytes: 640); // 20 ms PCM
+  final PcmFrameAccumulator _frames = PcmFrameAccumulator(frameBytes: 1600); // 50 ms: menor overhead de mensagens
   final SpeechActivityGate _gate = SpeechActivityGate(minimumSpeechFrames: 2);
   bool get hasRecentSpeechEvidence => _running && _following && _gate.hasRecentSpeechEvidence;
   ReceivePort? _events;
@@ -156,6 +156,17 @@ class StreamingAsrWorker implements AsrWorker {
   int _droppedFrames = 0;
   static const int _maxPendingBytes = 3 * 16000 * 2; // limite de segurança, não latência alvo.
   int _lastLagWarningAt = 0;
+  int _peakQueuedBytes = 0;
+  int _processedBytes = 0;
+  int _processingMicros = 0;
+  int? _firstPartialDelay;
+  int _startupMs = 0;
+  int _threads = 2;
+  String get metrics {
+    final rtf = _processedBytes == 0 ? 'aguardando' : (_processingMicros / (_processedBytes * 31.25)).toStringAsFixed(2);
+    final first = _firstPartialDelay == null ? 'aguardando' : '$_firstPartialDelay ms';
+    return 'CPU: $_threads threads · RTF: $rtf\nCarga: $_startupMs ms · Primeira hipótese após voz: $first\nFila: ${(_queuedBytes / 32).round()} ms · pico: ${(_peakQueuedBytes / 32).round()} ms · descartes: $_droppedFrames';
+  }
   final Stopwatch _clock = Stopwatch();
   int? _speechOnsetMs;
   bool _firstPartialReported = false;
@@ -164,6 +175,8 @@ class StreamingAsrWorker implements AsrWorker {
   Future<void> start() async {
     if (_running) return;
     onStatus('Carregando reconhecimento streaming pt-BR...');
+    final startup = Stopwatch()..start();
+    _threads = Platform.numberOfProcessors >= 8 ? 4 : 2;
     final files = await StreamingModelFiles.prepare();
     final ready = Completer<void>();
     final events = ReceivePort();
@@ -175,11 +188,14 @@ class StreamingAsrWorker implements AsrWorker {
           _commands = event['port'] as SendPort;
           _running = true;
           _following = true;
-          _clock.start();
+          _startupMs = startup.elapsedMilliseconds;
+          _clock..reset()..start();
           if (!ready.isCompleted) ready.complete();
           onStatus('Reconhecimento STREAMING pt-BR pronto.');
         case 'ack':
           if (event['epoch'] == _epoch) {
+            _processedBytes += event['bytes'] as int;
+            _processingMicros += (event['micros'] as int? ?? 0);
             _queuedBytes = (_queuedBytes - (event['bytes'] as int))
                 .clamp(0, _maxPendingBytes).toInt();
           }
@@ -191,6 +207,7 @@ class StreamingAsrWorker implements AsrWorker {
               if (!_firstPartialReported && _speechOnsetMs != null) {
                 _firstPartialReported = true;
                 final elapsed = _clock.elapsedMilliseconds - _speechOnsetMs!;
+                _firstPartialDelay = elapsed;
                 onStatus('Streaming · primeira hipótese: ${elapsed} ms após início detectado');
               }
             }
@@ -214,6 +231,7 @@ class StreamingAsrWorker implements AsrWorker {
           'decoder': files.decoder,
           'joiner': files.joiner,
           'tokens': files.tokens,
+          'threads': _threads,
         },
         debugName: 'teleprompter_streaming_ptbr',
       );
@@ -244,6 +262,7 @@ class StreamingAsrWorker implements AsrWorker {
         continue;
       }
       _queuedBytes += frame.lengthInBytes;
+      if (_queuedBytes > _peakQueuedBytes) _peakQueuedBytes = _queuedBytes;
       final now = DateTime.now().millisecondsSinceEpoch;
       if (_queuedBytes > 16000 * 2 && now - _lastLagWarningAt >= 5000) {
         _lastLagWarningAt = now;
@@ -280,6 +299,10 @@ class StreamingAsrWorker implements AsrWorker {
     _gate.reset();
     _queuedBytes = 0;
     _droppedFrames = 0;
+    _peakQueuedBytes = 0;
+    _processedBytes = 0;
+    _processingMicros = 0;
+    _firstPartialDelay = null;
     _speechOnsetMs = null;
     _firstPartialReported = false;
     if (_speaking) {
@@ -329,7 +352,7 @@ Future<void> _streamingIsolateMain(Map<String, Object> config) async {
           joiner: config['joiner']! as String,
         ),
         tokens: config['tokens']! as String,
-        numThreads: 2,
+        numThreads: config['threads']! as int,
         provider: 'cpu',
         debug: false,
       ),
@@ -354,6 +377,7 @@ Future<void> _streamingIsolateMain(Map<String, Object> config) async {
       if (event['type'] != 'audio') continue;
       final epoch = event['epoch'] as int;
       final count = event['bytes'] as int;
+      final processing = Stopwatch()..start();
       try {
         final view = (event['pcm'] as TransferableTypedData).materialize();
         final bytes = view.asUint8List();
@@ -394,7 +418,8 @@ Future<void> _streamingIsolateMain(Map<String, Object> config) async {
       } catch (error) {
         events.send({'type': 'error', 'message': '$error'});
       } finally {
-        events.send({'type': 'ack', 'bytes': count, 'epoch': epoch});
+        events.send({'type': 'ack', 'bytes': count, 'epoch': epoch,
+          'micros': processing.elapsedMicroseconds});
       }
     }
   } catch (error) {

@@ -1212,7 +1212,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     final engine = _speech.running ? 'Reconhecimento nativo' : _capture.activeVoiceEngine;
     final raw = _firstRawMs == null ? 'aguardando' : '$_firstRawMs ms: $_firstRawHypothesis';
     final matched = _firstMatchMs == null ? 'aguardando' : '$_firstMatchMs ms: $_firstMatchedWord';
-    return '$engine\n1ª hipótese desde Iniciar: $raw\n1º destaque: $matched';
+    return '$engine\n1ª hipótese desde Iniciar: $raw\n1º destaque: $matched\n${_capture.voiceMetrics}';
   }
 
   Widget _readerControls() => Padding(
@@ -1341,7 +1341,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                       Text(_voiceStatus, maxLines: 2,
                           overflow: TextOverflow.ellipsis),
                       if (_playing || _playPending || _firstRawHypothesis.isNotEmpty)
-                        Text(_voiceDiagnostics, maxLines: 5, overflow: TextOverflow.ellipsis,
+                        Text(_voiceDiagnostics, maxLines: 9, overflow: TextOverflow.ellipsis,
                             style: const TextStyle(fontSize: 12)),
                       if (_lastRecognizedText.isNotEmpty)
                         Text('Ouvido: $_lastRecognizedText',

@@ -390,6 +390,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     if (decision == VoiceScrollDecision.ignore) return;
 
     final confirmed = _tracker.accept(heard, isFinal: isFinal,
+      streamingPartials: _capture.streamingVoice,
       allowRewind: _capture.streamingVoice && decision == VoiceScrollDecision.advance);
     if (confirmed != null && confirmed < _readingCursor.confirmedIndex) {
       _undoIndex = _focusIndex;

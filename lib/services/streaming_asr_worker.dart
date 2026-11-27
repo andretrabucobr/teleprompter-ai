@@ -24,13 +24,16 @@ class StreamingModelFiles {
   final String tokens;
 
   static const _assets = 'assets/models/streaming';
-  static const _modelId =
-      'sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11';
+  static const _modelIds = {
+    'sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-160ms-int8-2026-06-11',
+    'sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-320ms-int8-2026-06-11',
+    'sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11',
+  };
 
   static Future<Map<String, dynamic>> _manifest() async {
     final json = await rootBundle.loadString('$_assets/manifest.json');
     final config = jsonDecode(json) as Map<String, dynamic>;
-    if (config['model'] != _modelId || config['locale'] != 'pt-BR') {
+    if (!_modelIds.contains(config['model']) || config['locale'] != 'pt-BR') {
       throw StateError('Manifesto Nemotron incorreto ou modelo diferente.');
     }
     return config;
@@ -47,6 +50,7 @@ class StreamingModelFiles {
 
   static Future<StreamingModelFiles> prepare() async {
     final config = await _manifest();
+    final modelId = config['model'] as String;
     final parts = (config['encoderParts'] as List<dynamic>).cast<String>();
     final total = config['encoderBytes'] as int;
     if (parts.isEmpty || total < 400000000 ||
@@ -68,7 +72,7 @@ class StreamingModelFiles {
     final marker = File('${dir.path}/installed-model.txt');
     bool cached = false;
     if (await marker.exists()) {
-      cached = (await marker.readAsString()).trim() == _modelId &&
+      cached = (await marker.readAsString()).trim() == modelId &&
           await encoderFile.exists() && await encoderFile.length() == total;
       for (final name in names) {
         final file = File('${dir.path}/$name');
@@ -111,7 +115,7 @@ class StreamingModelFiles {
         if (await target.exists()) await target.delete();
         await partial.rename(target.path);
       }
-      await marker.writeAsString(_modelId, flush: true);
+      await marker.writeAsString(modelId, flush: true);
     }
     return StreamingModelFiles(
       encoderFile.path,
@@ -148,7 +152,8 @@ class StreamingAsrWorker implements AsrWorker {
   int _epoch = 0;
   int _queuedBytes = 0;
   int _droppedFrames = 0;
-  static const int _maxPendingBytes = 3 * 16000 * 2; // backlog máx. 3 s.
+  static const int _maxPendingBytes = 3 * 16000 * 2; // limite de segurança, não latência alvo.
+  int _lastLagWarningAt = 0;
 
   @override
   Future<void> start() async {
@@ -227,6 +232,11 @@ class StreamingAsrWorker implements AsrWorker {
         continue;
       }
       _queuedBytes += frame.lengthInBytes;
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (_queuedBytes > 16000 * 2 && now - _lastLagWarningAt >= 5000) {
+        _lastLagWarningAt = now;
+        onStatus('ASR com fila de ${(_queuedBytes / 32).round()} ms de áudio.');
+      }
       _commands!.send(<String, Object>{
         'type': 'audio',
         'epoch': _epoch,
@@ -344,16 +354,18 @@ Future<void> _streamingIsolateMain(Map<String, Object> config) async {
         while (recognizer.isReady(stream) && steps++ < 200) {
           recognizer.decode(stream);
           decoded = true;
-        }
-        if (decoded) {
-          final current = recognizer.getResult(stream).text.trim();
-          if (current.isNotEmpty && current != lastPartial) {
-            lastPartial = current;
+          // Entregue cada hipótese alterada sem esperar drenar o áudio pronto.
+          final partial = recognizer.getResult(stream).text.trim();
+          if (partial.isNotEmpty && partial != lastPartial) {
+            lastPartial = partial;
             events.send(<String, Object>{
-              'type': 'result', 'text': current,
+              'type': 'result', 'text': partial,
               'epoch': epoch, 'final': false,
             });
           }
+        }
+        if (decoded) {
+          final current = lastPartial;
           if (recognizer.isEndpoint(stream)) {
             if (current.isNotEmpty) {
               events.send(<String, Object>{

@@ -13,6 +13,7 @@ class SpeechAlignmentTracker {
   String? _lastHypothesis;
   bool _lastWasFinal = false;
   bool _newUtterance = false;
+  String? _lastCommittedHypothesis;
 
   int get index => _index;
 
@@ -24,19 +25,29 @@ class SpeechAlignmentTracker {
     _lastHypothesis = null;
     _lastWasFinal = false;
     _newUtterance = false;
+    _lastCommittedHypothesis = null;
   }
 
   /// Retorna uma nova posição apenas quando o alinhamento é confiável.
-  int? accept(String transcript, {bool isFinal = false, bool allowRewind = false}) {
-    final normalized = ScriptMatcher.tokenize(transcript)
-        .map((word) => word.normalized).join(' ');
+  int? accept(String transcript, {bool isFinal = false, bool allowRewind = false,
+      bool streamingPartials = false}) {
+    final spoken = ScriptMatcher.tokenize(transcript);
+    final normalized = spoken.map((word) => word.normalized).join(' ');
+    final previous = _lastHypothesis;
+    final previousWasFinal = _lastWasFinal;
     if (normalized.isEmpty) return null;
     // A hipótese final pode repetir exatamente a parcial; não a descartar,
     // porque o resultado final tem mais peso em saltos maiores.
-    if (normalized == _lastHypothesis && (!isFinal || _lastWasFinal)) {
-      return null;
+    if (normalized == previous) {
+      if (streamingPartials && isFinal && !previousWasFinal &&
+          normalized == _lastCommittedHypothesis) {
+        _lastWasFinal = true;
+        _newUtterance = false;
+        return null;
+      }
+      if ((!isFinal || previousWasFinal) &&
+          !(streamingPartials && previousWasFinal && !isFinal)) return null;
     }
-    final previousWasFinal = _lastWasFinal;
     if (previousWasFinal && !isFinal) _newUtterance = true;
     if (isFinal) _newUtterance = false;
     _lastHypothesis = normalized;
@@ -44,7 +55,44 @@ class SpeechAlignmentTracker {
     // Se o streaming reconhece apenas UMA palavra, podemos acompanhar
     // somente quando ela é EXATAMENTE a próxima do roteiro. Não procurar
     // em outras regiões, evitando saltos e confusões com palavras parecidas.
-    final spoken = ScriptMatcher.tokenize(transcript);
+    if (streamingPartials) {
+      // O ASR envia uma hipótese cumulativa por fala. Aceite apenas a
+      // extensão nova quando o prefixo termina no cursor conhecido.
+      // Isso inclui palavras curtas, sem avançar por tempo ou som sozinho.
+      final words = spoken.map((word) => word.normalized).toList();
+      final prior = previous?.split(' ') ?? <String>[];
+      final fresh = previous == null || (previousWasFinal && !isFinal);
+      var start = -1;
+      if (fresh) {
+        start = 0;
+      } else if (previous == _lastCommittedHypothesis &&
+          words.length > prior.length && _index >= 0 &&
+          prior.isNotEmpty && prior.last == matcher.words[_index].normalized) {
+        var samePrefix = true;
+        for (var i = 0; i < prior.length; i++) {
+          if (prior[i] != words[i]) { samePrefix = false; break; }
+        }
+        if (samePrefix) start = prior.length;
+      }
+      if (start >= 0 && start < words.length) {
+        var target = _index;
+        for (var i = start; i < words.length; i++) {
+          if (target + 1 >= matcher.words.length ||
+              matcher.words[target + 1].normalized != words[i]) break;
+          target++;
+        }
+        // Não marque um prefixo curto como certeza se o resto contradiz.
+        if (target > _index && target - _index == words.length - start) {
+          _newUtterance = false;
+          return _commit(target);
+        }
+      }
+      // Hipótese final duplicada ou revisão sem extensão: não consuma
+      // a próxima palavra repetida por engano.
+      if (normalized == previous && !fresh && normalized == _lastCommittedHypothesis) {
+        return null;
+      }
+    }
     if (spoken.length == 1 && spoken.single.normalized.length >= 3) {
       final adjacent = _index + 1;
       if (adjacent >= 0 && adjacent < matcher.words.length &&
@@ -124,6 +172,7 @@ class SpeechAlignmentTracker {
 
   int _commit(int value) {
     _index = value;
+    _lastCommittedHypothesis = _lastHypothesis;
     _pending = null;
     _pendingVotes = 0;
     return value;

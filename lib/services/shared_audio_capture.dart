@@ -124,6 +124,8 @@ class SharedAudioCapture {
         encoder: AudioEncoder.pcm16bits,
         sampleRate: sampleRate,
         numChannels: 1,
+        // Solicita callbacks menores do microfone; o dispositivo pode ajustar.
+        streamBufferSize: 1600,
         autoGain: false,
         echoCancel: false,
         noiseSuppress: false,

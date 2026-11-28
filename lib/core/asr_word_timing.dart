@@ -81,9 +81,7 @@ class SentencePieceWordDecoder {
       if (token.startsWith('<') && token.endsWith('>')) continue;
 
       final hasSentencePieceBoundary = token.startsWith('▁');
-      final hasWhitespaceBoundary = token.startsWith(' ') ||
-          token.startsWith('\\t') || token.startsWith('\\n') ||
-          token.startsWith('\\r');
+      final hasWhitespaceBoundary = token.startsWith(' ');
       final piece = hasSentencePieceBoundary
           ? token.substring(1)
           : hasWhitespaceBoundary

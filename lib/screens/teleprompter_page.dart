@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:developer' show Timeline;
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -20,6 +21,7 @@ import '../core/voice_scroll_gate.dart';
 import '../core/contextual_script_tracker.dart';
 import '../services/remote_session.dart';
 import '../services/shared_audio_capture.dart';
+import '../services/voice_trace.dart';
 import '../services/video_audio_composer.dart';
 import '../services/script_repository.dart';
 import '../services/speech_follow_service.dart';
@@ -390,6 +392,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       };
 
   void _onTranscript(String transcript, bool isFinal) {
+    if (voiceTrace.enabled) voiceTrace.add('transcript_callback', {'text': transcript, 'final': isFinal, 'playing': _playing, 'pending': _playPending, 'manual': _manualScrolling, 'resetting': _resettingVoice, 'mode': _scrollMode.name});
     if ((!_playing && !_playPending) || _scrollMode != ScrollMode.voice || !mounted ||
         _manualScrolling || _resettingVoice) return;
     final heard = transcript.trim();
@@ -409,6 +412,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       initialSpeechEvidence: initialEvidence,
       allowFirstLateHighlight: streaming && _firstMatchedWord.isEmpty,
     );
+    if (voiceTrace.enabled) voiceTrace.add('gate', {'decision': decision.name, 'speaking': _voiceScrollGate.isSpeaking, 'recent_pcm': initialEvidence, 'confirmed': _activeIndex, 'focus': _focusIndex, 'highlight': _highlightIndex});
     if (decision == VoiceScrollDecision.ignore) {
       if (isFinal && streaming) {
         _tracker = ContextualScriptTracker(_script.text,
@@ -429,10 +433,12 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       return;
     }
 
+    final alignmentStart = Timeline.now;
     final update = _tracker.accept(heard, isFinal: isFinal,
       adjacentOnly: decision == VoiceScrollDecision.highlightOnly,
       allowRewind: streaming && decision == VoiceScrollDecision.advance);
     final changed = update.highlight != _highlightIndex;
+    if (voiceTrace.enabled) voiceTrace.add('alignment', {'duration_us': Timeline.now - alignmentStart, 'confirmed': update.confirmed, 'display': update.display, 'highlight': update.highlight, 'changed': changed, 'word': update.highlight >= 0 && update.highlight < _matcher.words.length ? _matcher.words[update.highlight].text : null});
     if (update.confirmed != _readingCursor.confirmedIndex) {
       _readingCursor.seek(update.confirmed);
     }
@@ -453,6 +459,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       }
       _focusIndex = (update.display + 1).clamp(0, _matcher.words.length - 1).toInt();
       _highlightIndex = update.highlight;
+      if (voiceTrace.enabled) voiceTrace.add('highlight_requested', {'index': update.highlight});
       if (_firstMatchedWord.isEmpty && _highlightIndex >= 0) {
         _firstMatchedWord = _matcher.words[_highlightIndex].text;
         _firstMatchMs = _voiceSessionClock.elapsedMilliseconds;
@@ -485,6 +492,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     if (!mounted || _scrollMode != ScrollMode.voice) return;
     if (!_playing && !_playPending) return;
     if (active) _firstVoiceMs ??= _voiceSessionClock.elapsedMilliseconds;
+    voiceTrace.add('speech_activity', {'speaking': active});
     _voiceScrollGate.onSpeechActivity(active);
     if (!_playing) {
       _pendingVoiceActivity = active;
@@ -644,6 +652,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     _firstMatchMs = null;
     _firstVoiceMs = null;
     _voiceSessionClock..reset()..start();
+    if (voiceTrace.enabled) voiceTrace.add('play', {'script': _script.text, 'focus': _focusIndex, 'anchor': _activeIndex, 'highlight': _highlightIndex, 'camera': _mode == PrompterMode.camera, 'font_size': _fontSize});
     _playPending = true;
     _broadcast();
     _pendingVoiceActivity = false;
@@ -706,6 +715,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   }
 
   Future<void> _pause() async {
+    voiceTrace.add('pause', {'metrics': _capture.voiceMetrics});
     // Não solta o microfone enquanto a inicialização do vídeo está em curso.
     if (_recordingBusy && !_recording) return;
     ++_playGeneration;
@@ -779,6 +789,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   void _seekTo(int index, {bool reposition = true}) {
     if (_matcher.words.isEmpty || !mounted) return;
     final next = index.clamp(0, _matcher.words.length - 1).toInt();
+    voiceTrace.add('seek', {'from': _focusIndex, 'to': next});
     if (next != _focusIndex) _undoIndex = _focusIndex;
     _manualScrolling = false;
     _voiceScrollEpoch++;
@@ -999,6 +1010,41 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       if (videoStopped) await _pause();
       _syncScreenAwake();
       _broadcast();
+    }
+  }
+
+  Future<void> _toggleVoiceTrace() async {
+    if (voiceTrace.enabled) {
+      voiceTrace.add('finish', {'metrics': _capture.voiceMetrics});
+      voiceTrace.stop();
+      if (mounted) setState(() {});
+      _notice('Diagnóstico finalizado. Exporte o arquivo JSON.');
+      return;
+    }
+    final accepted = await showDialog<bool>(context: context, builder: (context) =>
+      AlertDialog(title: const Text('Diagnóstico de voz'),
+        content: const Text('Registra localmente o roteiro, hipóteses de voz e tempos de processamento. Não grava áudio bruto nem vídeo. Iniciar substitui o log anterior.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Iniciar diagnóstico')),
+        ]));
+    if (accepted != true || !mounted) return;
+    voiceTrace.start();
+    voiceTrace.add('session_context', {'script': _script.text, 'anchor': _activeIndex,
+      'focus': _focusIndex, 'highlight': _highlightIndex, 'metrics': _capture.voiceMetrics});
+    setState(() {});
+    _notice('Diagnóstico iniciado. Faça suas rodadas de leitura.');
+  }
+
+  Future<void> _exportVoiceTrace() async {
+    if (!voiceTrace.hasData) return;
+    try {
+      final json = voiceTrace.exportJson();
+      final dir = await Directory.systemTemp.createTemp('flowtext_trace_');
+      final file = await File('${dir.path}/flowtext_build26_log.json').writeAsString(json, flush: true);
+      await SharePlus.instance.share(ShareParams(files: [XFile(file.path)], text: 'Diagnóstico FlowText Build 26'));
+    } catch (e) {
+      if (mounted) _notice('Falha ao exportar diagnóstico: $e');
     }
   }
 
@@ -1490,6 +1536,14 @@ class _TeleprompterPageState extends State<TeleprompterPage>
           appBar: _fullScreen ? null : AppBar(
             title: const Text('Oitosete FlowText'),
             actions: [
+              PopupMenuButton<String>(
+                tooltip: 'Diagnóstico de voz', icon: const Icon(Icons.bug_report),
+                onSelected: (value) { if (value == 'toggle') { unawaited(_toggleVoiceTrace()); } else { unawaited(_exportVoiceTrace()); } },
+                itemBuilder: (_) => [
+                  PopupMenuItem(value: 'toggle', child: Text(voiceTrace.enabled ? 'Finalizar diagnóstico' : 'Iniciar diagnóstico')),
+                  PopupMenuItem(value: 'export', enabled: voiceTrace.hasData, child: const Text('Exportar log JSON')),
+                ],
+              ),
               if (_remoteConnected)
                 const Padding(padding: EdgeInsets.symmetric(horizontal: 4),
                     child: Icon(Icons.cast_connected, color: Colors.greenAccent)),

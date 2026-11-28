@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' show Timeline;
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:typed_data';
@@ -11,6 +12,7 @@ import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 import '../core/pcm_frame_accumulator.dart';
 import '../core/speech_activity_gate.dart';
 import 'asr_worker.dart';
+import 'voice_trace.dart';
 
 /// Nemotron 3.5 Streaming INT8. O encoder de ~627 MB é dividido em partes
 /// de 8 MiB durante o build para não carregar tudo em RAM no primeiro uso.
@@ -152,6 +154,8 @@ class StreamingAsrWorker implements AsrWorker {
   bool _following = false;
   bool _speaking = false;
   int _epoch = 0;
+  int _frameSequence = 0;
+  int _captureBytes = 0;
   int _queuedBytes = 0;
   int _droppedFrames = 0;
   static const int _maxPendingBytes = 3 * 16000 * 2; // limite de segurança, não latência alvo.
@@ -193,6 +197,7 @@ class StreamingAsrWorker implements AsrWorker {
           _startupMs = startup.elapsedMilliseconds;
           _warmupMs = event['warmupMs'] as int? ?? 0;
           _clock..reset()..start();
+          voiceTrace.add('asr_ready', {'startup_ms': _startupMs, 'warmup_ms': _warmupMs, 'threads': _threads});
           if (!ready.isCompleted) ready.complete();
           onStatus('Reconhecimento STREAMING pt-BR pronto.');
         case 'ack':
@@ -202,11 +207,23 @@ class StreamingAsrWorker implements AsrWorker {
             if (event['decodeMs'] is int) _firstDecodeMs ??= event['decodeMs'] as int;
             _queuedBytes = (_queuedBytes - (event['bytes'] as int))
                 .clamp(0, _maxPendingBytes).toInt();
+            if (voiceTrace.enabled) voiceTrace.add('asr_ack', {
+              'epoch': _epoch, 'frame': event['frame'], 'audio_end_ms': event['audioEndMs'],
+              'queue_wait_us': event['queueWaitUs'], 'processing_us': event['micros'],
+              'decode_ms': event['decodeMs'], 'decode_steps': event['decodeSteps'],
+              'pending_ms': _queuedBytes / 32, 'dropped_frames': _droppedFrames,
+              'rtf': _processedBytes == 0 ? null : _processingMicros / (_processedBytes * 31.25),
+            });
           }
         case 'result':
           if (_running && _following && event['epoch'] == _epoch) {
             final value = event['text'];
             if (value is String && value.trim().isNotEmpty) {
+              if (voiceTrace.enabled) voiceTrace.add('asr_result', {
+                'epoch': _epoch, 'frame': event['frame'], 'audio_end_ms': event['audioEndMs'],
+                'text': value, 'final': event['final'] == true,
+                'worker_emitted_us': event['emittedUs'], 'pending_ms': _queuedBytes / 32,
+              });
               onText(value, event['final'] == true);
               if (!_firstPartialReported && _speechOnsetMs != null) {
                 _firstPartialReported = true;
@@ -218,6 +235,7 @@ class StreamingAsrWorker implements AsrWorker {
           }
         case 'error':
           final details = '${event['message']}';
+          voiceTrace.add('asr_error', {'message': details});
           onStatus('Erro no streaming: $details');
           if (!ready.isCompleted) ready.completeError(StateError(details));
         case 'stopped':
@@ -250,6 +268,11 @@ class StreamingAsrWorker implements AsrWorker {
   void addPcm(Uint8List pcm) {
     if (!_running || !_following || pcm.isEmpty || _commands == null) return;
     _gate.addPcm(pcm);
+    _captureBytes += pcm.lengthInBytes;
+    if (voiceTrace.enabled) voiceTrace.add('pcm_received', {
+      'epoch': _epoch, 'bytes': pcm.lengthInBytes, 'audio_end_ms': _captureBytes / 32,
+      'speech': _gate.currentlySpeaking, 'pending_ms': _queuedBytes / 32,
+    });
     final speaking = _gate.currentlySpeaking;
     if (_speaking != speaking) {
       _speaking = speaking;
@@ -260,6 +283,7 @@ class StreamingAsrWorker implements AsrWorker {
     for (final frame in _frames.add(pcm)) {
       if (_queuedBytes + frame.lengthInBytes > _maxPendingBytes) {
         _droppedFrames++;
+        if (voiceTrace.enabled) voiceTrace.add('asr_drop', {'epoch': _epoch, 'dropped_frames': _droppedFrames, 'pending_ms': _queuedBytes / 32});
         if (_droppedFrames == 10) {
           onStatus('O celular está atrasando a transcrição; o WAV continua íntegro.');
         }
@@ -276,6 +300,9 @@ class StreamingAsrWorker implements AsrWorker {
         'type': 'audio',
         'epoch': _epoch,
         'bytes': frame.lengthInBytes,
+        'frame': ++_frameSequence,
+        'audioEndMs': _captureBytes / 32,
+        'sentUs': Timeline.now,
         'pcm': TransferableTypedData.fromList([frame]),
       });
     }
@@ -299,8 +326,10 @@ class StreamingAsrWorker implements AsrWorker {
   }
 
   void _resetPcm() {
+    voiceTrace.add('asr_reset', {'epoch': _epoch, 'metrics': metrics});
     _frames.reset();
     _gate.reset();
+    _captureBytes = 0;
     _queuedBytes = 0;
     _droppedFrames = 0;
     _peakQueuedBytes = 0;
@@ -399,7 +428,9 @@ Future<void> _streamingIsolateMain(Map<String, Object> config) async {
       final epoch = event['epoch'] as int;
       final count = event['bytes'] as int;
       final processing = Stopwatch()..start();
+      final queueWaitUs = Timeline.now - (event['sentUs'] as int);
       int? decodeMs;
+      var decodeSteps = 0;
       try {
         final view = (event['pcm'] as TransferableTypedData).materialize();
         final bytes = view.asUint8List();
@@ -414,6 +445,7 @@ Future<void> _streamingIsolateMain(Map<String, Object> config) async {
         while (recognizer.isReady(stream) && steps++ < 200) {
           final decodeClock = Stopwatch()..start();
           recognizer.decode(stream);
+          decodeSteps++;
           decodeMs ??= decodeClock.elapsedMilliseconds;
           decoded = true;
           // Entregue cada hipótese alterada sem esperar drenar o áudio pronto.
@@ -423,6 +455,7 @@ Future<void> _streamingIsolateMain(Map<String, Object> config) async {
             events.send(<String, Object>{
               'type': 'result', 'text': partial,
               'epoch': epoch, 'final': false,
+              'frame': event['frame'], 'audioEndMs': event['audioEndMs'], 'emittedUs': Timeline.now,
             });
           }
         }
@@ -433,6 +466,7 @@ Future<void> _streamingIsolateMain(Map<String, Object> config) async {
               events.send(<String, Object>{
                 'type': 'result', 'text': current,
                 'epoch': epoch, 'final': true,
+                'frame': event['frame'], 'audioEndMs': event['audioEndMs'], 'emittedUs': Timeline.now,
               });
             }
             recognizer.reset(stream);
@@ -444,6 +478,8 @@ Future<void> _streamingIsolateMain(Map<String, Object> config) async {
       } finally {
         events.send({'type': 'ack', 'bytes': count, 'epoch': epoch,
           'micros': processing.elapsedMicroseconds,
+          'frame': event['frame'], 'audioEndMs': event['audioEndMs'],
+          'queueWaitUs': queueWaitUs, 'decodeSteps': decodeSteps,
           if (decodeMs != null) 'decodeMs': decodeMs});
       }
     }

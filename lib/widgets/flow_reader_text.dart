@@ -1,8 +1,10 @@
 import 'dart:ui' show TextBox;
+import 'dart:developer' show Timeline;
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import '../core/app_colors.dart';
 import '../core/script_matcher.dart';
+import '../services/voice_trace.dart';
 
 /// Layout estático. O cursor muda exclusivamente a pintura.
 class FlowReaderText extends LeafRenderObjectWidget {
@@ -135,10 +137,12 @@ class FlowReaderRender extends RenderBox {
 
   @override
   void paint(PaintingContext context, Offset offset) {
+    final paintStart = Timeline.now;
     final canvas = context.canvas;
     final index = _highlight.value;
     if (index < 0 || index >= _words.length) {
       _white.paint(canvas, offset);
+      if (voiceTrace.enabled) voiceTrace.add('reader_paint', {'index': index, 'duration_us': Timeline.now - paintStart});
       return;
     }
     final word = _words[index];
@@ -160,6 +164,7 @@ class FlowReaderRender extends RenderBox {
     draw(_dim, read);
     draw(_active, active);
     canvas.restore();
+    if (voiceTrace.enabled) voiceTrace.add('reader_paint', {'index': index, 'duration_us': Timeline.now - paintStart});
   }
 
   @override

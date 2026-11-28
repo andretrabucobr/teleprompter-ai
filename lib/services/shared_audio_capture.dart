@@ -6,6 +6,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:record/record.dart';
 
 import 'wav_pcm_writer.dart';
+import 'voice_trace.dart';
 import 'asr_worker.dart';
 import 'streaming_asr_worker.dart';
 import 'whisper_asr_worker.dart';
@@ -132,6 +133,7 @@ class SharedAudioCapture {
         _writer = await WavPcmWriter.open(
             '${temp.path}/voz_$stamp.wav', sampleRate: sampleRate);
       }
+      voiceTrace.add('mic_start_requested');
       final stream = await recorder.startStream(const RecordConfig(
         encoder: AudioEncoder.pcm16bits,
         sampleRate: sampleRate,
@@ -145,6 +147,7 @@ class SharedAudioCapture {
       _streamError = null;
       _active = true;
       _transcribing = followVoice;
+      voiceTrace.add('mic_ready', {'engine': recognizerName, 'sample_rate': sampleRate});
       _subscription = stream.listen((Uint8List chunk) {
         // A falha do ASR não deve invalidar a trilha de áudio do vídeo.
         try {

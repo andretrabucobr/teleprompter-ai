@@ -8,7 +8,7 @@ void main() {
       ['▁Bom', '▁di', 'a', '▁Oito', 'sete'],
       [0.10, 0.42, 0.48, 0.82, 0.90],
     );
-    expect(words.map((word) => word.text).toList(), ['Bom', 'dia', 'Oit sete']);
+    expect(words.map((word) => word.text).toList(), ['Bom', 'dia', 'Oitosete']);
     expect(words[0].startSeconds, 0.10);
     expect(words[1].startSeconds, 0.42);
     expect(words[1].endSeconds, 0.48);

@@ -30,7 +30,10 @@ class AsrTimedTranscript {
   final double segmentStartMs;
 }
 
-/// Agrupa peças BPE/SentencePiece sem perder o timestamp de cada palavra.
+/// Agrupa os tokens emitidos pelo sherpa-onnx em palavras.
+/// O Nemotron/sherpa pode emitir tanto marcadores SentencePiece (▁)
+/// quanto tokens com espaço ASCII inicial (" T", " de") e tokens
+/// contendo somente espaço (" "). Ambos indicam início de palavra.
 class SentencePieceWordDecoder {
   static List<AsrWordTiming> decode(
     List<String> tokens,
@@ -44,7 +47,6 @@ class SentencePieceWordDecoder {
     final buffer = StringBuffer();
     double? start;
     double? end;
-    double? pendingBoundary;
     var tokenCount = 0;
     var lastTime = 0.0;
 
@@ -75,38 +77,29 @@ class SentencePieceWordDecoder {
       final time = candidate < lastTime ? lastTime : candidate;
       lastTime = time;
 
-      if (token == '▁') {
-        flush();
-        pendingBoundary = time;
-        continue;
-      }
-
-      if (token.startsWith('▁')) {
-        flush();
-        final piece = token.substring(1);
-        if (piece.isEmpty) {
-          pendingBoundary = time;
-          continue;
-        }
-        buffer.write(piece);
-        start = pendingBoundary ?? time;
-        end = time;
-        tokenCount = 1;
-        pendingBoundary = null;
-        continue;
-      }
-
       // Marcadores de controle não fazem parte de uma palavra falada.
       if (token.startsWith('<') && token.endsWith('>')) continue;
 
+      final hasSentencePieceBoundary = token.startsWith('▁');
+      final hasWhitespaceBoundary = RegExp(r'^\\s+').hasMatch(token);
+      final piece = hasSentencePieceBoundary
+          ? token.substring(1)
+          : hasWhitespaceBoundary
+              ? token.trimLeft()
+              : token;
+
+      if (hasSentencePieceBoundary || hasWhitespaceBoundary) {
+        flush();
+      }
+      if (piece.isEmpty) continue;
+
       if (buffer.isEmpty) {
-        buffer.write(token);
-        start = pendingBoundary ?? time;
+        buffer.write(piece);
+        start = time;
         end = time;
         tokenCount = 1;
-        pendingBoundary = null;
       } else {
-        buffer.write(token);
+        buffer.write(piece);
         end = time;
         tokenCount++;
       }

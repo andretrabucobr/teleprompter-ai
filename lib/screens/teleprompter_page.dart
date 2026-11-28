@@ -1208,7 +1208,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     try {
       final json = voiceTrace.exportJson();
       final dir = await Directory.systemTemp.createTemp('flowtext_trace_');
-      final file = await File('${dir.path}/flowtext_build33_log.json').writeAsString(json, flush: true);
+      final file = await File('${dir.path}/flowtext_build35_log.json').writeAsString(json, flush: true);
       final files = <XFile>[XFile(file.path)];
       final audioPath = voiceTrace.audioPath;
       if (audioPath != null && await File(audioPath).exists() && await File(audioPath).length() > 44) {
@@ -1217,8 +1217,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       await SharePlus.instance.share(ShareParams(
         files: files,
         text: files.length == 1
-            ? 'Diagnóstico FlowText Build 33 (JSON)'
-            : 'Diagnóstico FlowText Build 33 (JSON + áudio PCM original)',
+            ? 'Diagnóstico FlowText Build 35 (JSON)'
+            : 'Diagnóstico FlowText Build 35 (JSON + áudio PCM original)',
       ));
     } catch (e) {
       if (mounted) _notice('Falha ao exportar diagnóstico: $e');

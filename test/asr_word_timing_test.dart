@@ -15,6 +15,31 @@ void main() {
     expect(words[1].tokenCount, 2);
   });
 
+  test('decodifica os tokens reais do Nemotron com espaços iniciais', () {
+    final tokens = [
+      ' T', 'este', ' de', ' ', 'i', 'ní', 'cio',
+      ' H', 'oje', ' ', 'o', ' vou', ' ', 'ler',
+    ];
+    final words = SentencePieceWordDecoder.decode(tokens, [
+      1.92, 1.92, 2.24, 2.32, 2.32, 2.48, 2.56,
+      3.20, 3.20, 3.44, 3.44, 3.52, 3.68, 3.68,
+    ]);
+    expect(words.map((word) => word.text).toList(),
+        ['Teste', 'de', 'início', 'Hoje', 'o', 'vou', 'ler']);
+    expect(words.first.startSeconds, 1.92);
+    expect(words[1].startSeconds, 2.24);
+    expect(words[2].tokenCount, 3);
+    expect(words.last.endSeconds, 3.68);
+  });
+
+  test('aceita marcadores SentencePiece e ignora espaços isolados', () {
+    final words = SentencePieceWordDecoder.decode(
+      ['▁Bom', '▁dia', ' ', '▁Oito', 'sete'],
+      [0.1, 0.2, 0.3, 0.4, 0.5],
+    );
+    expect(words.map((word) => word.text).toList(), ['Bom', 'dia', 'Oitosete']);
+  });
+
   test('preserva a ordem temporal em timestamps regressivos', () {
     final words = SentencePieceWordDecoder.decode(
       ['▁um', '▁dois', '▁três'], [0.2, 0.1, 0.3],

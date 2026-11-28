@@ -57,8 +57,8 @@ class VoiceTrace {
 
     if (recordAudio) {
       final dir = await getTemporaryDirectory();
-      final folder = await Directory('${dir.path}/flowtext_build32').create(recursive: true);
-      _audioPath = '${folder.path}/flowtext_build33_audio.wav';
+      final folder = await Directory('${dir.path}/flowtext_build35').create(recursive: true);
+      _audioPath = '${folder.path}/flowtext_build35_audio.wav';
       try {
         if (await File(_audioPath!).exists()) await File(_audioPath!).delete();
         _audioWriter = await WavPcmWriter.open(_audioPath!, sampleRate: _sampleRate);
@@ -71,13 +71,14 @@ class VoiceTrace {
 
     enabled = true;
     add('trace_start', {
-      'build': '0.10.0+33',
+      'build': '0.10.0+35',
       'os': Platform.operatingSystem,
       'os_version': Platform.operatingSystemVersion,
       'logical_processors': Platform.numberOfProcessors,
       'clock': 'Dart Timeline.now; microseconds',
       'record_audio': recordAudio,
       'audio_format': recordAudio ? 'WAV PCM16 mono 16000 Hz; exact PCM chunks passed to Nemotron' : null,
+      'token_boundary_format': 'whitespace-prefixed sherpa tokens and SentencePiece ▁ markers',
       'audio_max_seconds': recordAudio ? 240 : null,
     });
   }
@@ -179,7 +180,7 @@ class VoiceTrace {
             'sample_count': _audioSamples,
             'duration_ms': _audioSamples * 1000 / _sampleRate,
             'truncated': _audioTruncated,
-            'file': 'flowtext_build33_audio.wav',
+            'file': 'flowtext_build35_audio.wav',
           });
         }
       } catch (e) {
@@ -199,12 +200,12 @@ class VoiceTrace {
 
   String exportJson() => const JsonEncoder.withIndent('  ').convert({
     'schema': 1,
-    'build': '0.10.0+33',
+    'build': '0.10.0+35',
     'started_utc': _startedAt,
     'timeline_origin_us': _originUs,
     'dropped_events': _dropped,
     'audio': _audioPath == null ? null : {
-      'file': 'flowtext_build33_audio.wav',
+      'file': 'flowtext_build35_audio.wav',
       'format': 'PCM16 mono 16000 Hz',
       'sample_count': _audioSamples,
       'duration_ms': _audioSamples * 1000 / _sampleRate,

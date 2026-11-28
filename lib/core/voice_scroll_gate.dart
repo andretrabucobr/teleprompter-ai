@@ -39,14 +39,24 @@ class VoiceScrollGate {
   /// transcript-only fallback. The streaming/Whisper engines have VAD.
   VoiceScrollDecision decide({
     required bool hasActivityDetector,
+    bool initialSpeechEvidence = false,
+    bool allowFirstLateHighlight = false,
     DateTime? at,
   }) {
     if (!hasActivityDetector) return VoiceScrollDecision.advance;
     if (_speaking) return VoiceScrollDecision.advance;
+    // A primeira hipótese alinhada não precisa esperar o VAD estabilizar.
+    // Continua sem mover a tela; o chamador exige coincidência adjacente.
+    if (initialSpeechEvidence && !_usedTrailingHighlight) return VoiceScrollDecision.highlightOnly;
     if (!_hasSpoken || _usedTrailingHighlight || _lastStoppedAt == null) {
       return VoiceScrollDecision.ignore;
     }
     final delay = (at ?? DateTime.now()).difference(_lastStoppedAt!);
+    if (!delay.isNegative && allowFirstLateHighlight &&
+        delay <= const Duration(seconds: 3)) {
+      // Apenas a primeira coincidência adjacente já falada; sem rolagem.
+      return VoiceScrollDecision.highlightOnly;
+    }
     if (delay.isNegative || delay > trailingHighlightWindow) {
       return VoiceScrollDecision.ignore;
     }

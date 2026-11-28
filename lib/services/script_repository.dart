@@ -5,10 +5,48 @@ import 'package:path_provider/path_provider.dart';
 /// Roteiro salvo em arquivo no diretório privado do app.
 /// Não é necessário criar conta ou enviar conteúdo para um servidor.
 class ScriptRepository {
-  static const sample = '''Bem-vindo ao Oitosete FlowText!\n\n'''
+  static const _legacySample = '''Bem-vindo ao Oitosete FlowText!\n\n'''
       '''Este texto pode acompanhar sua fala, ou avançar em velocidade fixa.\n\n'''
       '''Para gravar na câmera do aplicativo, selecione Câmera.\n\n'''
       '''Para controlar de outro celular, abra Controle remoto nos dois aparelhos.''';
+
+  static const _previousSample = '''Olá, bom dia! Hoje eu vou falar com você sobre um novo projeto.
+
+A ideia é simples. Eu quero ler cada palavra com calma e seguir o texto no meu próprio ritmo.
+
+Agora vamos fazer uma pequena pausa. Muito bem, podemos continuar. O trabalho de hoje começa aqui.
+
+Temos 3 etapas e 25 minutos para apresentar a proposta. A tecnologia de IA pode ajudar a nossa equipe.
+
+Vamos voltar a um ponto importante. A ideia é simples. Eu quero ler cada palavra com calma.
+
+Por fim, agradeço a sua atenção. Até a próxima!''';
+
+  static const sample = '''Teste de início. Hoje eu vou ler este roteiro do começo ao fim, em voz natural, sem acelerar e sem soletrar as palavras.
+
+A primeira frase precisa ser reconhecida desde a palavra hoje. O destaque deve acompanhar cada palavra na ordem em que eu falar.
+
+Agora vou repetir uma frase: a leitura precisa ser clara e o resultado precisa ser claro. A leitura precisa ser clara e o resultado precisa ser claro.
+
+Vamos testar palavras curtas: eu, tu, nós, vocês, de, do, da, em, com, sem, por e para. Eu quero ler cada palavra com calma. Eu quero ver cada palavra com calma.
+
+Vamos testar números: são 3 etapas, 25 minutos, 2 salas e 16 tarefas. A reunião começa às 9 horas e termina às 17 horas.
+
+Agora as siglas e os nomes: IA, ASR, PCM, Android, iOS e FlowText. A equipe vai comparar o áudio original com o texto reconhecido.
+
+Esta frase tem palavras parecidas: casa, caso, coisa, causa e caça. Agora vou trocar apenas uma palavra: o texto está claro. O texto está correto.
+
+Agora vou fazer uma pausa de três segundos.
+
+Voltei. Vou continuar exatamente do ponto em que parei. Não vou repetir o início.
+
+A ideia é simples, mas precisa funcionar de forma precisa. A ideia é simples, mas precisa funcionar de forma precisa.
+
+Para terminar, agradeço a atenção. Este foi o teste completo de reconhecimento e alinhamento.''';
+
+  /// Atualiza somente o exemplo anterior intacto. Roteiros próprios são preservados.
+  static String resolveSavedScript(String saved) =>
+      saved == _legacySample || saved == _previousSample ? sample : saved;
 
   Future<File> _file() async {
     final directory = await getApplicationDocumentsDirectory();
@@ -18,12 +56,26 @@ class ScriptRepository {
   Future<String> load() async {
     final file = await _file();
     if (!await file.exists()) return sample;
-    return file.readAsString();
+    return resolveSavedScript(await file.readAsString());
   }
 
   Future<void> save(String text) async {
     final file = await _file();
     await file.writeAsString(text, flush: true);
+  }
+
+  Future<double> loadFontSize() async {
+    final directory = await getApplicationDocumentsDirectory();
+    final file = File('${directory.path}/fonte.txt');
+    try {
+      final value = double.tryParse(await file.readAsString());
+      return value != null && value.isFinite ? value.clamp(12, 200).toDouble() : 36;
+    } catch (_) { return 36; }
+  }
+
+  Future<void> saveFontSize(double size) async {
+    final directory = await getApplicationDocumentsDirectory();
+    await File('${directory.path}/fonte.txt').writeAsString('$size');
   }
 
   Future<List<String>> listVideos() async {

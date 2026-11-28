@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../services/remote_session.dart';
+import '../core/script_matcher.dart';
+import '../core/reading_navigation.dart';
 
 class RemoteControllerPage extends StatefulWidget {
   const RemoteControllerPage({super.key});
@@ -10,7 +12,7 @@ class RemoteControllerPage extends StatefulWidget {
   State<RemoteControllerPage> createState() => _RemoteControllerPageState();
 }
 
-class _RemoteControllerPageState extends State<RemoteControllerPage> {
+class _RemoteControllerPageState extends State<RemoteControllerPage> with WidgetsBindingObserver {
   final _address = TextEditingController();
   final _port = TextEditingController();
   final _pin = TextEditingController();
@@ -31,6 +33,17 @@ class _RemoteControllerPageState extends State<RemoteControllerPage> {
   Map<String, dynamic> _state = {};
   String _status = 'Não conectado';
   bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _client.reconnect();
+  }
 
   Future<void> _scan() async {
     final value = await Navigator.push<String>(
@@ -73,6 +86,7 @@ class _RemoteControllerPageState extends State<RemoteControllerPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _client.disconnect();
     _address.dispose();
     _port.dispose();
@@ -127,7 +141,18 @@ class _RemoteControllerPageState extends State<RemoteControllerPage> {
         ),
         const SizedBox(height: 12),
         Text(_status, style: TextStyle(color: connected ? Colors.greenAccent : Colors.amberAccent)),
+        if (connected) TextButton.icon(
+          onPressed: () async { await _client.disconnect(); if (mounted) setState(() { _status = 'Desconectado'; _state = {}; }); },
+          icon: const Icon(Icons.link_off), label: const Text('Desconectar'),
+        ),
         const Divider(height: 30),
+        if (_state['script'] is String) ...[
+          Text('Monitor do roteiro', style: Theme.of(context).textTheme.titleLarge),
+          const Text('Toque em uma palavra ou role para reposicionar.'),
+          _RemoteReader(state: _state, onSeek: connected ? (index) => _client.command('seek_word', index) : null),
+          if (connected && _state['undoAvailable'] == true)
+            TextButton.icon(onPressed: () => _client.command('undo_seek'), icon: const Icon(Icons.undo), label: const Text('Desfazer posição')),
+        ],
         Text('Comandos', style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 12),
         Wrap(spacing: 8, runSpacing: 8, children: [
@@ -142,14 +167,14 @@ class _RemoteControllerPageState extends State<RemoteControllerPage> {
             label: const Text('Reiniciar'),
           ),
           OutlinedButton.icon(
-            onPressed: connected ? () => _client.command('seek', -12) : null,
+            onPressed: connected ? () => _client.command('seek_paragraph', -1) : null,
             icon: const Icon(Icons.fast_rewind),
-            label: const Text('Voltar'),
+            label: const Text('Voltar parágrafo'),
           ),
           OutlinedButton.icon(
-            onPressed: connected ? () => _client.command('seek', 12) : null,
+            onPressed: connected ? () => _client.command('seek_paragraph', 1) : null,
             icon: const Icon(Icons.fast_forward),
-            label: const Text('Avançar'),
+            label: const Text('Avançar parágrafo'),
           ),
           OutlinedButton.icon(
             onPressed: connected ? () => _client.command('set_mirror', _state['mirror'] != true) : null,
@@ -158,12 +183,16 @@ class _RemoteControllerPageState extends State<RemoteControllerPage> {
           ),
         ]),
         const SizedBox(height: 16),
+        if (connected)
+          DropdownButton<String>(value: _state['scrollMode'] == 'speed' ? 'speed' : 'voice',
+            items: const [DropdownMenuItem(value: 'voice', child: Text('Por voz')), DropdownMenuItem(value: 'speed', child: Text('Velocidade'))],
+            onChanged: recording ? null : (value) { if (value != null) _client.command('set_scroll_mode', value); }),
         Text('Tamanho da fonte: ${font.round()}'),
         Row(children: [
-          IconButton(onPressed: connected ? () => _client.command('set_font_size', (font - 4).clamp(20, 72)) : null,
+          IconButton(onPressed: connected ? () => _client.command('set_font_size', (font - 4).clamp(12, 200)) : null,
               icon: const Icon(Icons.remove_circle_outline)),
           const Expanded(child: Text('Fonte', textAlign: TextAlign.center)),
-          IconButton(onPressed: connected ? () => _client.command('set_font_size', (font + 4).clamp(20, 72)) : null,
+          IconButton(onPressed: connected ? () => _client.command('set_font_size', (font + 4).clamp(12, 200)) : null,
               icon: const Icon(Icons.add_circle_outline)),
         ]),
         Text('Velocidade: ${speed.round()} px/s'),
@@ -176,7 +205,7 @@ class _RemoteControllerPageState extends State<RemoteControllerPage> {
         ]),
         const Divider(height: 26),
         FilledButton.icon(
-          onPressed: connected && _state['mode'] == 'camera'
+          onPressed: connected && _state['mode'] == 'camera' && (recording || _state['allowRemoteRecording'] == true)
               ? () => _client.command(recording ? 'record_stop' : 'record_start')
               : null,
           icon: Icon(recording ? Icons.stop_circle : Icons.fiber_manual_record),
@@ -212,4 +241,85 @@ class _ScanPairPageState extends State<_ScanPairPage> {
           },
         ),
       );
+}
+
+/// Réplica de texto com seleção de palavra e scroll sem transmissão de vídeo.
+class _RemoteReader extends StatefulWidget {
+  const _RemoteReader({required this.state, required this.onSeek});
+  final Map<String, dynamic> state;
+  final ValueChanged<int>? onSeek;
+  @override
+  State<_RemoteReader> createState() => _RemoteReaderState();
+}
+class _RemoteReaderState extends State<_RemoteReader> {
+  final _scroll = ScrollController();
+  final _key = GlobalKey();
+  bool _dragging = false;
+  String _script = '';
+  List<ScriptWord> _words = [];
+  double _width = 300;
+  static const _style = TextStyle(color: Colors.white, fontSize: 24, height: 1.5);
+  int get _index => (widget.state['readingIndex'] as int? ?? 0).clamp(0, _words.isEmpty ? 0 : _words.length-1).toInt();
+  int get _highlight => widget.state['highlightIndex'] as int? ?? -1;
+  TextSpan _span() {
+    var at = 0;
+    final spans = <InlineSpan>[];
+    for (var i=0; i<_words.length; i++) {
+      final w = _words[i];
+      spans.add(TextSpan(text: _script.substring(at, w.start)));
+      spans.add(TextSpan(text: w.text, style: i == _highlight ? const TextStyle(backgroundColor: Colors.green, color: Colors.white) : i == _index ? const TextStyle(color: Colors.greenAccent) : null));
+      at=w.end;
+    }
+    spans.add(TextSpan(text: _script.substring(at)));
+    return TextSpan(style: _style, children: spans);
+  }
+  TextPainter _painter() => TextPainter(text: _span(), textDirection: TextDirection.ltr, textAlign: TextAlign.center, textScaler: MediaQuery.textScalerOf(context))..layout(maxWidth: _width);
+  void _sync() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_scroll.hasClients || _dragging || _words.isEmpty) return;
+      final painter = _painter();
+      try {
+        final w = _words[_highlight >= 0 && _highlight < _words.length ? _highlight : _index];
+        final boxes = painter.getBoxesForSelection(TextSelection(baseOffset: w.start, extentOffset: w.end));
+        if (boxes.isNotEmpty) _scroll.jumpTo(boxes.first.top.clamp(0.0, _scroll.position.maxScrollExtent).toDouble());
+      } finally { painter.dispose(); }
+    });
+  }
+  @override
+  void initState() { super.initState(); _readScript(); _sync(); }
+  void _readScript() { _script = widget.state['script'] as String? ?? ''; _words = ScriptMatcher.tokenize(_script); }
+  @override
+  void didUpdateWidget(covariant _RemoteReader oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final changed = oldWidget.state['script'] != widget.state['script'];
+    if (changed) _readScript();
+    if (changed || oldWidget.state['readingIndex'] != widget.state['readingIndex'] || oldWidget.state['highlightIndex'] != widget.state['highlightIndex']) _sync();
+  }
+  void _select(Offset position) {
+    if (_words.isEmpty || widget.onSeek == null) return;
+    final painter = _painter();
+    try { widget.onSeek!(ReadingNavigation(_script, _words).atOffset(painter.getPositionForOffset(position).offset)); }
+    finally { painter.dispose(); }
+  }
+  @override
+  void dispose() { _scroll.dispose(); super.dispose(); }
+  @override
+  Widget build(BuildContext context) => Container(
+    height: 300, color: Colors.black,
+    child: LayoutBuilder(builder: (context, constraints) {
+      _width = (constraints.maxWidth - 24).clamp(1.0, 10000.0).toDouble();
+      return NotificationListener<ScrollNotification>(onNotification: (n) {
+        if (n.depth != 0) return false;
+        if ((n is ScrollStartNotification && n.dragDetails != null) || (n is ScrollUpdateNotification && n.dragDetails != null)) _dragging = true;
+        if (n is ScrollEndNotification && _dragging) {
+          _dragging = false;
+          _select(Offset(1, _scroll.offset));
+        }
+        return false;
+      }, child: SingleChildScrollView(controller: _scroll, physics: const ClampingScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(12, 100, 12, 220),
+        child: GestureDetector(onTapUp: (d) => _select(d.localPosition), child: Text.rich(_span(), key: _key, textAlign: TextAlign.center)),
+      ));
+    }),
+  );
 }

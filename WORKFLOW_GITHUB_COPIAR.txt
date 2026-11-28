@@ -1,15 +1,15 @@
-name: Oitosete FlowText 0.9.4 — Android e iOS
+name: Oitosete FlowText 0.10.0 — Build 33
 
 # Execute manualmente para controlar uso de minutos e downloads grandes.
 on:
   workflow_dispatch:
     inputs:
       modelo:
-        description: 'Reconhecimento: streaming pt-BR (novo) ou Whisper'
+        description: 'Teste de latência: Nemotron 320 ms (streaming_320); referência 560 ms (streaming)'
         required: true
-        default: 'streaming'
+        default: 'streaming_320'
         type: choice
-        options: [streaming, streaming_leve, base, tiny, small]
+        options: [streaming_80, streaming_160, streaming_320, streaming, streaming_leve, base, tiny, small]
       tipo_apk:
         description: 'APK Android: menor para celulares modernos (release_arm64), todas ABIs ou debug'
         required: true
@@ -32,7 +32,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: '21'
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -49,6 +49,11 @@ jobs:
         shell: bash
         run: |
           case '${{ inputs.modelo }}' in
+            streaming_80|streaming_160|streaming_320)
+              chunk='${{ inputs.modelo }}'
+              python3 scripts/instalar_streaming.py --chunk-ms "${chunk#streaming_}"
+              python3 scripts/instalar_modelo.py --model tiny
+              ;;
             streaming)
               # Comportamento anterior: streaming e Whisper Tiny de segurança.
               python3 scripts/instalar_streaming.py
@@ -116,31 +121,88 @@ jobs:
                       'A correção foi interrompida para evitar alterações indevidas.'
                   )
           PYTHON
+      - name: Verificar Java 21 e restaurar Lint completo do CameraX
+        shell: bash
+        run: |
+          java -version
+          flutter config --jdk-dir="$JAVA_HOME"
+          (cd android && ./gradlew --version)
+          python3 - <<'PYTHON'
+          import json
+          from pathlib import Path
+
+          # Remove apenas o workaround anterior, caso o cache Pub o contenha.
+          plugins = json.loads(Path('.flutter-plugins-dependencies').read_text(encoding='utf-8'))
+          marker = '\n// FlowText: workaround CameraX CommentDetector\n'
+          for plugin in plugins['plugins']['android']:
+              if plugin['name'] != 'camera_android_camerax':
+                  continue
+              android = Path(plugin['path']) / 'android'
+              for gradle in (android / 'build.gradle', android / 'build.gradle.kts'):
+                  if not gradle.is_file():
+                      continue
+                  source = gradle.read_text(encoding='utf-8')
+                  if marker in source:
+                      base, suffix = source.split(marker, 1)
+                      expected = (
+                          'android {\n    lint {\n        disable += setOf("EasterEgg", "StopShip")\n    }\n}\n'
+                          if gradle.suffix == '.kts' else
+                          'android {\n    lint {\n        disable "EasterEgg", "StopShip"\n    }\n}\n'
+                      )
+                      if suffix != expected:
+                          raise SystemExit(f'Workaround em estado inesperado: {gradle}')
+                      gradle.write_text(base, encoding='utf-8')
+                      print(f'Lint original restaurado: {gradle}')
+          PYTHON
+      - name: Cache de dependências Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: false
       - name: Compilar APK Android no modo solicitado
         shell: bash
         run: |
-          case '${{ inputs.tipo_apk }}' in
-            release_arm64)
-              # Padrão recomendado: um único APK arm64, sem recursos de debug.
-              flutter build apk --release --target-platform android-arm64 --split-per-abi \
-                --split-debug-info=build/simbolos/android
-              ;;
-            release_todas)
-              # APK separado por arquitetura para dispositivos mais antigos.
-              flutter build apk --release --split-per-abi \
-                --split-debug-info=build/simbolos/android
-              ;;
-            debug)
-              # Apenas para investigação de falhas; arquivo muito maior.
-              flutter build apk --debug
-              ;;
-            *) exit 2 ;;
-          esac
+          set -o pipefail
+          build_apk() {
+            case '${{ inputs.tipo_apk }}' in
+              release_arm64)
+                # Padrão recomendado: um único APK arm64, sem recursos de debug.
+                flutter build apk --release --target-platform android-arm64 --split-per-abi \
+                  --split-debug-info=build/simbolos/android
+                ;;
+              release_todas)
+                # APK separado por arquitetura para dispositivos mais antigos.
+                flutter build apk --release --split-per-abi \
+                  --split-debug-info=build/simbolos/android
+                ;;
+              debug)
+                # Apenas para investigação de falhas; arquivo muito maior.
+                flutter build apk --debug
+                ;;
+              *) exit 2 ;;
+            esac
+          }
+          log="$RUNNER_TEMP/flowtext-android-build.log"
+          for attempt in 1 2 3 4; do
+            if build_apk 2>&1 | tee "$log"; then
+              exit 0
+            fi
+            if ! grep -Eiq 'status code (429|502|503|504)|Too Many Requests|Read timed out|Connection timed out|Connection reset' "$log"; then
+              echo "::error::Falha de compilação não relacionada à rede."
+              exit 1
+            fi
+            if [ "$attempt" -eq 4 ]; then
+              echo "::error::Repositório de dependências indisponível após quatro tentativas."
+              exit 1
+            fi
+            delay=$((30 * attempt))
+            echo "::warning::Falha temporária de rede; nova tentativa em ${delay}s."
+            sleep "$delay"
+          done
       - name: Medir tamanho real do APK e componentes
         run: python3 scripts/relatorio_tamanho.py
       - uses: actions/upload-artifact@v4
         with:
-          name: oitosete-flowtext-v094-${{ inputs.modelo }}-${{ inputs.tipo_apk }}
+          name: oitosete-flowtext-v0100-${{ inputs.modelo }}-${{ inputs.tipo_apk }}
           path: |
             build/app/outputs/flutter-apk/*.apk
             relatorio_tamanho_build.md
@@ -169,6 +231,11 @@ jobs:
         shell: bash
         run: |
           case '${{ inputs.modelo }}' in
+            streaming_80|streaming_160|streaming_320)
+              chunk='${{ inputs.modelo }}'
+              python3 scripts/instalar_streaming.py --chunk-ms "${chunk#streaming_}"
+              python3 scripts/instalar_modelo.py --model tiny
+              ;;
             streaming)
               # Comportamento anterior: streaming e Whisper Tiny de segurança.
               python3 scripts/instalar_streaming.py
@@ -201,7 +268,7 @@ jobs:
         run: cd build/ios/iphoneos && zip -qry ../../../oitosete-flowtext-ios-sem-assinatura.zip Runner.app
       - uses: actions/upload-artifact@v4
         with:
-          name: oitosete-flowtext-v094-${{ inputs.modelo }}-ios-unsigned
+          name: oitosete-flowtext-v0100-${{ inputs.modelo }}-ios-unsigned
           path: |
             oitosete-flowtext-ios-sem-assinatura.zip
             relatorio_tamanho_ios.txt

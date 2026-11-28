@@ -1,6 +1,16 @@
-# Oitosete FlowText — v0.9.4 (revisão de tamanho)
+# Oitosete FlowText — v0.10.0 (Beta 2 — Smart Seek e Remote Studio)
 
 Projeto **completo** para Android e iOS. Este pacote incorpora a v0.9.2 consolidada, o ícone com 25% mais margem da atualização posterior e uma compilação Android otimizada.
+
+## Novidades da Beta 2
+
+- Fonte de 12 a 200 pontos lógicos, com persistência local.
+- Smart Seek: repetir parágrafo, navegar com arraste, pressionar uma palavra e desfazer posicionamento. O cursor ASR é reancorado sem parar a gravação.
+- Hipóteses parciais: caminho rápido para sequência exata adjacente, frames de 50 ms no streaming e destaque sem alterar o peso tipográfico. Retorno automático experimental limitado a nova fala streaming com contexto único.
+- Remote Studio: abra o endereço HTTP exibido no pareamento no navegador; use o PIN. Monitor de texto sincronizado, seleção por palavra, rolagem, atalhos, ajustes e reconexão.
+- Reposição de conexão nativa após desbloquear, reconexão com backoff e identificação por cliente. Apenas um operador por sessão.
+
+Veja `docs/BETA_2_V0100.md` para critérios de teste e limitações.
 
 ## Funcionalidades preservadas
 
@@ -38,4 +48,4 @@ Leia `COMO_ATUALIZAR_GITHUB.md`. Não misture arquivos de versões anteriores. O
 
 ## Estado da validação
 
-Testes locais de scripts Python de configuração, modelo e relatório de tamanho aprovados. **Flutter, Android SDK e Xcode não estão disponíveis neste ambiente**, portanto não foram executados testes Flutter, compilação nem testes no celular da v0.9.4. Os tamanhos finais devem ser obtidos no relatório do GitHub Actions.
+A validação desta versão requer `flutter analyze`, `flutter test` e teste em dispositivos. **Flutter, Android SDK e Xcode não estavam disponíveis no ambiente de edição**; não houve compilação nem teste de hardware da v0.10.0. Os tamanhos finais devem ser obtidos no relatório do GitHub Actions.

@@ -20,6 +20,7 @@ class IdentidadeNativaTests(unittest.TestCase):
         (self.root / 'scripts').mkdir()
         for name in ('configurar_plataformas.py', 'configurar_splash.py'):
             shutil.copy2(PROJECT / 'scripts' / name, self.root / 'scripts' / name)
+        shutil.copytree(PROJECT / 'scripts/native', self.root / 'scripts/native')
         shutil.copytree(PROJECT / 'scripts/icon_assets', self.root / 'scripts/icon_assets')
         shutil.copytree(PROJECT / 'scripts/launch_assets', self.root / 'scripts/launch_assets')
 
@@ -42,6 +43,9 @@ class IdentidadeNativaTests(unittest.TestCase):
 ''', encoding='utf-8')
         gradle = self.root / 'android/app/build.gradle.kts'
         gradle.write_text('android { defaultConfig { minSdk = flutter.minSdkVersion } }', encoding='utf-8')
+        activity = main / 'kotlin/com/example/teleprompter_ai/MainActivity.kt'
+        activity.parent.mkdir(parents=True)
+        activity.write_text('package com.example.teleprompter_ai\nclass MainActivity {}\n')
         styles = main / 'res/values/styles.xml'
         styles.parent.mkdir(parents=True, exist_ok=True)
         styles.write_text('<resources><style name="NormalTheme"><item name="android:windowBackground">?android:colorBackground</item></style></resources>')
@@ -54,6 +58,12 @@ class IdentidadeNativaTests(unittest.TestCase):
         app = ET.parse(main / 'AndroidManifest.xml').getroot().find('application')
         self.assertEqual(app.attrib[android_label], 'Oitosete FlowText')
         self.assertIn('minSdk = 24', gradle.read_text())
+        self.assertEqual(gradle.read_text().count('org.jmdns:jmdns:3.5.10'), 1)
+        self.assertIn('package com.example.teleprompter_ai', activity.read_text())
+        self.assertIn('flowtext/lan_name', activity.read_text())
+        self.assertIn('flowtext/local_voice', activity.read_text())
+        self.assertIn('isOnDeviceRecognitionAvailable', activity.read_text())
+        self.assertIn('CHANGE_WIFI_MULTICAST_STATE', first)
         self.assertTrue((main / 'res/mipmap-hdpi/ic_launcher.png').is_file())
         self.assertTrue((main / 'res/mipmap-anydpi-v26/ic_launcher.xml').is_file())
         self.assertTrue((main / 'res/drawable-nodpi/otst_logo.png').is_file())

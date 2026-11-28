@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Instala Nemotron 3.5 INT8 streaming pt-BR para Flutter sem Git LFS.
 
-Downloads oficiais da sherpa-onnx. Modelo com 560 ms de lookahead;
+Downloads oficiais da sherpa-onnx. Variantes de 80, 160, 320 e 560 ms;
 a latência real também depende do dispositivo e da decodificação.
 A divisão do encoder em partes de 8 MiB evita carregar ~627 MB em RAM no
 primeiro início do aplicativo.
@@ -25,6 +25,12 @@ URL = f'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/{ARCH
 # SHA256 e tamanho da distribuição sherpa-onnx (arquivo fixado).
 SHA256 = 'c6bf5e0df765f9d5b43bc9e0536d4b4b3e7d40bdf5ecf13e45f134c51c05ae3a'
 SIZE = 475271763
+VARIANTS = {
+    80: ('fb170128c496db33a1fb9f5f9f823257f42f911224ee218bb429f3c2eaf90a8d', 475274007),
+    160: ('a81909a1780d84cff16d73c15e13e67d9d81d8839faf14870d507d8499f7a61a', 475273363),
+    320: ('5f311142337a5c161e92d49f7a3009d8607d3836f39d610bff5307c74d1d2c53', 475272949),
+    560: (SHA256, SIZE),
+}
 PART_BYTES = 8 * 1024 * 1024
 REQUIRED = {'encoder.int8.onnx', 'decoder.int8.onnx', 'joiner.int8.onnx', 'tokens.txt'}
 MINIMUM_SIZE = {'encoder.int8.onnx': 400_000_000,
@@ -47,7 +53,7 @@ def verify_archive(path: Path, expected_sha256: str = SHA256,
 
 def extract_model(archive: Path, destination: Path, *,
                   minimum_size: dict[str, int] | None = None,
-                  part_bytes: int = PART_BYTES) -> dict:
+                  part_bytes: int = PART_BYTES, model: str = MODEL) -> dict:
     """Extrai somente os quatro arquivos conhecidos sem executar paths do TAR."""
     minimum = MINIMUM_SIZE if minimum_size is None else minimum_size
     destination.mkdir(parents=True, exist_ok=True)
@@ -85,7 +91,7 @@ def extract_model(archive: Path, destination: Path, *,
                 raise ValueError(f'Arquivo truncado: {name}')
     if set(seen) != REQUIRED:
         raise ValueError(f'Arquivos faltando no arquivo oficial: {REQUIRED - set(seen)}')
-    manifest = {'model': MODEL, 'locale': 'pt-BR', 'sampleRate': 16000,
+    manifest = {'model': model, 'locale': 'pt-BR', 'sampleRate': 16000,
                 'encoderBytes': seen['encoder.int8.onnx'],
                 'encoderParts': parts,
                 'files': {name: seen[name] for name in sorted(REQUIRED - {'encoder.int8.onnx'})}}
@@ -96,22 +102,24 @@ def extract_model(archive: Path, destination: Path, *,
 def install(offline_archive: Path | None = None, *,
             expected_sha256: str = SHA256, expected_size: int = SIZE,
             minimum_size: dict[str, int] | None = None,
-            part_bytes: int = PART_BYTES) -> None:
+            part_bytes: int = PART_BYTES, model: str = MODEL) -> None:
+    archive_name = model + '.tar.bz2'
+    url = f'https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/{archive_name}'
     DEST.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='nemotron-', dir=str(DEST)) as temp:
         tmp = Path(temp)
-        archive = tmp / ARCHIVE_NAME
+        archive = tmp / archive_name
         if offline_archive:
             shutil.copyfile(offline_archive, archive)
         else:
-            print(f'Baixando Nemotron streaming pt-BR: {URL}', flush=True)
-            with urllib.request.urlopen(URL, timeout=120) as response, archive.open('wb') as fd:
+            print(f'Baixando Nemotron streaming pt-BR: {url}', flush=True)
+            with urllib.request.urlopen(url, timeout=120) as response, archive.open('wb') as fd:
                 shutil.copyfileobj(response, fd, 1024 * 1024)
         verify_archive(archive, expected_sha256, expected_size)
         extracted = tmp / 'files'
         manifest = extract_model(archive, extracted,
                                  minimum_size=minimum_size,
-                                 part_bytes=part_bytes)
+                                 part_bytes=part_bytes, model=model)
         for old in DEST.glob('encoder.part*'):
             old.unlink()
         for entry in extracted.iterdir():
@@ -122,8 +130,11 @@ def install(offline_archive: Path | None = None, *,
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--archive', type=Path, help='Cópia do arquivo .tar.bz2 oficial para build offline')
+    parser.add_argument('--chunk-ms', type=int, choices=sorted(VARIANTS), default=560)
     args = parser.parse_args()
-    install(args.archive)
+    sha, size = VARIANTS[args.chunk_ms]
+    model = MODEL.replace('-560ms-', f'-{args.chunk_ms}ms-')
+    install(args.archive, expected_sha256=sha, expected_size=size, model=model)
 
 
 if __name__ == '__main__':

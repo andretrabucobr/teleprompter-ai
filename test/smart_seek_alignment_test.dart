@@ -1,0 +1,87 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:teleprompter_ai/core/script_matcher.dart';
+import 'package:teleprompter_ai/core/speech_alignment_tracker.dart';
+
+void main() {
+  test('primeira palavra não depende da hipótese errada da segunda', () {
+    final tracker = SpeechAlignmentTracker(ScriptMatcher('Bom dia hoje vamos gravar.'));
+    expect(tracker.accept('Bom dinheiro', streamingPartials: true), 0);
+    expect(tracker.accept('Bom dia', streamingPartials: true), 1);
+    expect(tracker.accept('Bom dia jovem', streamingPartials: true), isNull);
+    expect(tracker.accept('Bom dia hoje', streamingPartials: true), 2);
+  });
+  test('evidência inicial aceita apenas prefixo adjacente e não salta', () {
+    final tracker = SpeechAlignmentTracker(ScriptMatcher('A casa fica perto da praça.'));
+    expect(tracker.accept('perto da praça', streamingPartials: true, adjacentOnly: true), isNull);
+    expect(tracker.accept('A coisa', streamingPartials: true, adjacentOnly: true), 0);
+    expect(tracker.accept('A casa', streamingPartials: true), 1);
+  });
+  test('um prefixo falado incompleto nunca inventa a palavra inteira', () {
+    final tracker = SpeechAlignmentTracker(ScriptMatcher('Apresentação de hoje.'));
+    expect(tracker.accept('Apre', streamingPartials: true, adjacentOnly: true), isNull);
+    expect(tracker.accept('Apresentação', streamingPartials: true, adjacentOnly: true), 0);
+  });
+  test('primeira palavra confirmada mesmo com segunda incompleta', () {
+    final tracker = SpeechAlignmentTracker(ScriptMatcher('Bom dia vamos começar.'));
+    expect(tracker.accept('Bom di', streamingPartials: true), 0);
+    expect(tracker.accept('Bom dia', streamingPartials: true), 1);
+    expect(tracker.accept('Bom dia va', streamingPartials: true), isNull);
+    expect(tracker.accept('Bom dia vamos', streamingPartials: true), 2);
+  });
+  test('primeira palavra curta após reposicionamento', () {
+    final tracker = SpeechAlignmentTracker(ScriptMatcher('Hoje a casa é bonita.'));
+    tracker.seek(0);
+    expect(tracker.accept('a ca', streamingPartials: true), 1);
+    expect(tracker.accept('a casa', streamingPartials: true), 2);
+  });
+  test('primeira hipótese parcial incompleta não inventa palavra', () {
+    final tracker = SpeechAlignmentTracker(ScriptMatcher('Bom dia.'));
+    expect(tracker.accept('Bo', streamingPartials: true), isNull);
+    expect(tracker.accept('Bom di', streamingPartials: true), 0);
+  });
+  test('streaming confirma imediatamente palavras curtas e repetidas', () {
+    final tracker = SpeechAlignmentTracker(ScriptMatcher('A casa de um amigo é bonita.'));
+    expect(tracker.accept('A', streamingPartials: true), 0);
+    expect(tracker.accept('A casa', streamingPartials: true), 1);
+    expect(tracker.accept('A casa de', streamingPartials: true), 2);
+    expect(tracker.accept('A casa de um', streamingPartials: true), 3);
+    expect(tracker.accept('A casa de um amigo é', streamingPartials: true), 5);
+    expect(tracker.accept('A casa de um amigo é', streamingPartials: true, isFinal: true), isNull);
+    expect(tracker.accept('bonita', streamingPartials: true), 6);
+  });
+  test('final duplicado não consome palavra repetida do roteiro', () {
+    final tracker = SpeechAlignmentTracker(ScriptMatcher('Vai vai agora.'));
+    expect(tracker.accept('Vai', streamingPartials: true), 0);
+    expect(tracker.accept('Vai', streamingPartials: true, isFinal: true), isNull);
+    expect(tracker.index, 0);
+    expect(tracker.accept('Vai', streamingPartials: true), 1);
+    expect(tracker.accept('Vai agora', streamingPartials: true), 2);
+  });
+  test('parcial sem correspondência não pula pela palavra isolada', () {
+    final tracker = SpeechAlignmentTracker(ScriptMatcher('A casa de um amigo.'));
+    expect(tracker.accept('Amigo', streamingPartials: true), isNull);
+    expect(tracker.index, -1);
+  });
+  test('palavra adjacente curta e parcial avança sem aguardar final', () {
+    final tracker = SpeechAlignmentTracker(ScriptMatcher('Bom dia hoje vamos gravar.'));
+    expect(tracker.accept('Bom'), 0);
+    expect(tracker.accept('Bom dia'), 1);
+    expect(tracker.accept('Bom dia hoje'), 2);
+    expect(tracker.accept('Bom dia hoje', isFinal: true), isNull);
+  });
+  test('retorno experimental somente em nova fala inequívoca', () {
+    final tracker = SpeechAlignmentTracker(ScriptMatcher('Céu azul ilumina montanhas distantes. Nosso projeto começa nesta manhã tranquila. Agora concluímos esta apresentação.'));
+    tracker.seek(10);
+    tracker.accept('Agora concluímos esta apresentação', isFinal: true, allowRewind: true);
+    expect(tracker.index, 14);
+    expect(tracker.accept('Céu azul', allowRewind: true), isNull);
+    expect(tracker.accept('Céu azul ilumina montanhas', allowRewind: true), 3);
+    expect(tracker.accept('Céu azul ilumina montanhas distantes', allowRewind: true), 4);
+  });
+  test('repetição final atrasada não volta', () {
+    final tracker = SpeechAlignmentTracker(ScriptMatcher('Céu azul ilumina montanhas distantes. Nosso projeto começa nesta manhã tranquila.'));
+    tracker.seek(9);
+    expect(tracker.accept('Céu azul ilumina montanhas', isFinal: true, allowRewind: true), isNull);
+    expect(tracker.index, 9);
+  });
+}

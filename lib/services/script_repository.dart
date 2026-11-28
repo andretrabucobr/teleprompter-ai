@@ -5,10 +5,26 @@ import 'package:path_provider/path_provider.dart';
 /// Roteiro salvo em arquivo no diretório privado do app.
 /// Não é necessário criar conta ou enviar conteúdo para um servidor.
 class ScriptRepository {
-  static const sample = '''Bem-vindo ao Oitosete FlowText!\n\n'''
+  static const _legacySample = '''Bem-vindo ao Oitosete FlowText!\n\n'''
       '''Este texto pode acompanhar sua fala, ou avançar em velocidade fixa.\n\n'''
       '''Para gravar na câmera do aplicativo, selecione Câmera.\n\n'''
       '''Para controlar de outro celular, abra Controle remoto nos dois aparelhos.''';
+
+  static const sample = '''Olá, bom dia! Hoje eu vou falar com você sobre um novo projeto.
+
+A ideia é simples. Eu quero ler cada palavra com calma e seguir o texto no meu próprio ritmo.
+
+Agora vamos fazer uma pequena pausa. Muito bem, podemos continuar. O trabalho de hoje começa aqui.
+
+Temos 3 etapas e 25 minutos para apresentar a proposta. A tecnologia de IA pode ajudar a nossa equipe.
+
+Vamos voltar a um ponto importante. A ideia é simples. Eu quero ler cada palavra com calma.
+
+Por fim, agradeço a sua atenção. Até a próxima!''';
+
+  /// Atualiza somente o exemplo anterior intacto. Roteiros próprios são preservados.
+  static String resolveSavedScript(String saved) =>
+      saved == _legacySample ? sample : saved;
 
   Future<File> _file() async {
     final directory = await getApplicationDocumentsDirectory();
@@ -18,7 +34,7 @@ class ScriptRepository {
   Future<String> load() async {
     final file = await _file();
     if (!await file.exists()) return sample;
-    return file.readAsString();
+    return resolveSavedScript(await file.readAsString());
   }
 
   Future<void> save(String text) async {

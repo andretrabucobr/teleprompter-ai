@@ -53,6 +53,19 @@ class ContextualScriptTracker {
 
   TrackingUpdate get state => TrackingUpdate(_confirmed, _display, _highlight);
 
+  /// Reinicia o alinhamento após uma busca manual, sem reaproveitar
+  /// hipóteses temporizadas da posição anterior.
+  void seek(int index, {int? highlight}) {
+    _confirmed = index.clamp(-1, words.length - 1).toInt();
+    _display = _confirmed;
+    _confirmedHighlight = highlight ?? -1;
+    _highlight = _confirmedHighlight;
+    _lastPartial = null;
+    _lastFinal = null;
+    _lastTimedPartial = null;
+    _lastTimedFinal = null;
+  }
+
   /// Alinha palavras reconstruídas dos tokens, preservando a ordem e os tempos.
   /// A hipótese continua cumulativa; somente a extensão nova é devolvida à UI.
   TimedTrackingUpdate acceptTimedWords(

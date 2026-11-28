@@ -173,6 +173,9 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       if (mounted) {
         setState(() => _scriptLoaded = true);
         _broadcast();
+        if (_foreground && _scrollMode == ScrollMode.voice && !_playPending && !_playing) {
+          unawaited(_capture.prepareVoice());
+        }
       }
     }
   }
@@ -733,7 +736,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     if (_recording && _capture.running) {
       _capture.pauseFollowing(); // O WAV continua, mesmo com o texto pausado.
     } else if (_capture.running) {
-      await _capture.discard();
+      await _capture.discard(keepPrepared: _foreground && _scrollMode == ScrollMode.voice);
     }
     if (mounted) {
       setState(() {
@@ -857,6 +860,12 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     await _pause();
     if (!mounted) return;
     setState(() => _scrollMode = mode);
+    if (mode == ScrollMode.voice && _foreground) {
+      unawaited(_capture.prepareVoice());
+    } else {
+      await _capture.releasePreparedVoice();
+      if (!mounted) return;
+    }
     _seekTo(_focusIndex);
     _broadcast();
     // Selecionar Voz não inicia o microfone sem o usuário pedir.
@@ -1046,8 +1055,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     try {
       final json = voiceTrace.exportJson();
       final dir = await Directory.systemTemp.createTemp('flowtext_trace_');
-      final file = await File('${dir.path}/flowtext_build29_log.json').writeAsString(json, flush: true);
-      await SharePlus.instance.share(ShareParams(files: [XFile(file.path)], text: 'Diagnóstico FlowText Build 29'));
+      final file = await File('${dir.path}/flowtext_build30_log.json').writeAsString(json, flush: true);
+      await SharePlus.instance.share(ShareParams(files: [XFile(file.path)], text: 'Diagnóstico FlowText Build 30'));
     } catch (e) {
       if (mounted) _notice('Falha ao exportar diagnóstico: $e');
     }
@@ -1503,12 +1512,23 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     _foreground = state == AppLifecycleState.resumed;
     _syncScreenAwake();
     if (state == AppLifecycleState.paused) {
+      // Mark the cache unavailable synchronously, then release when ready.
+      unawaited(_capture.releasePreparedVoice().catchError((Object _) {}));
       if (_recording) {
         _stopRecording().catchError((Object _) {});
       } else {
         _pause().catchError((Object _) {});
       }
+    } else if (state == AppLifecycleState.resumed && _scriptLoaded &&
+        _scrollMode == ScrollMode.voice && !_playing && !_playPending && !_recording) {
+      unawaited(_capture.prepareVoice());
     }
+  }
+
+  @override
+  void didHaveMemoryPressure() {
+    // Never interrupt an active recognition or recording for an idle cache.
+    unawaited(_capture.releasePreparedVoice().catchError((Object _) {}));
   }
 
   @override
@@ -1527,6 +1547,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     unawaited(SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge)
         .catchError((Object _) {}));
     _speech.dispose();
+    unawaited(_capture.releasePreparedVoice().catchError((Object _) {}));
     _capture.discard().catchError((Object _) {});
     _host?.stop();
     _camera?.dispose();

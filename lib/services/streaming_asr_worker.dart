@@ -171,6 +171,7 @@ class StreamingAsrWorker implements AsrWorker {
   int _warmupMs = 0;
   int? _firstDecodeMs;
   int _threads = 2;
+  String _modelId = 'unknown';
   String get metrics {
     final rtf = _processedBytes == 0 ? 'aguardando' : (_processingMicros / (_processedBytes * 31.25)).toStringAsFixed(2);
     final first = _firstPartialDelay == null ? 'aguardando' : '$_firstPartialDelay ms';
@@ -187,6 +188,7 @@ class StreamingAsrWorker implements AsrWorker {
     final startup = Stopwatch()..start();
     _threads = Platform.numberOfProcessors >= 8 ? 4 : 2;
     final files = await StreamingModelFiles.prepare();
+    _modelId = files.modelId;
     final ready = Completer<void>();
     final events = ReceivePort();
     _events = events;
@@ -326,6 +328,7 @@ class StreamingAsrWorker implements AsrWorker {
     _resetPcm();
     _commands?.send(<String, Object>{'type': 'reset', 'epoch': _epoch});
     _following = true;
+    voiceTrace.add('asr_resume', {'model': _modelId, 'threads': _threads, 'epoch': _epoch});
   }
 
   void _resetPcm() {

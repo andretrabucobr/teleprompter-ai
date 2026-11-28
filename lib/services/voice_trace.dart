@@ -25,7 +25,7 @@ class VoiceTrace {
     _startedAt = DateTime.now().toUtc().toIso8601String();
     enabled = true;
     add('trace_start', {
-      'build': '0.10.0+29',
+      'build': '0.10.0+30',
       'os': Platform.operatingSystem,
       'os_version': Platform.operatingSystemVersion,
       'logical_processors': Platform.numberOfProcessors,
@@ -54,7 +54,7 @@ class VoiceTrace {
 
   String exportJson() => const JsonEncoder.withIndent('  ').convert({
     'schema': 1,
-    'build': '0.10.0+29',
+    'build': '0.10.0+30',
     'started_utc': _startedAt,
     'timeline_origin_us': _originUs,
     'dropped_events': _dropped,

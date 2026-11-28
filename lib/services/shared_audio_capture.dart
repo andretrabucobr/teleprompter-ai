@@ -10,6 +10,7 @@ import 'voice_trace.dart';
 import 'asr_worker.dart';
 import 'streaming_asr_worker.dart';
 import 'whisper_asr_worker.dart';
+import 'warm_voice_cache.dart';
 
 class CapturedAudio {
   const CapturedAudio({
@@ -42,6 +43,8 @@ class SharedAudioCapture {
   StreamSubscription<Uint8List>? _subscription;
   WavPcmWriter? _writer;
   AsrWorker? _recognizer;
+  late final _warmVoice = WarmVoiceCache<StreamingAsrWorker>(_createPreparedStreaming);
+  bool _preloadAllowed = true;
   Future<void>? _starting;
   Future<CapturedAudio?>? _stopping;
   bool _active = false;
@@ -66,7 +69,48 @@ class SharedAudioCapture {
   int get sampleCount => _writer?.sampleCount ?? 0;
   String? get currentWavPath => _writer?.path;
 
+  /// Foreground-only warmup, with synthetic silence inside the worker.
+  /// No permission request, recorder, audio samples, or WAV are involved.
+  Future<StreamingAsrWorker?> _createPreparedStreaming() async {
+    if (!_preloadAllowed || !await StreamingModelFiles.isBundled()) return null;
+    final worker = StreamingAsrWorker(onText: onTranscript, onStatus: onStatus,
+      onSpeechActivity: onSpeechActivity);
+    final clock = Stopwatch()..start();
+    voiceTrace.add('asr_preload_start');
+    try {
+      await worker.start();
+      worker.suspend();
+      voiceTrace.add('asr_preload_ready', {'elapsed_ms': clock.elapsedMilliseconds});
+      return worker;
+    } catch (e) {
+      await worker.stop();
+      voiceTrace.add('asr_preload_error', {'message': '$e'});
+      return null;
+    }
+  }
+
+  Future<void> prepareVoice() async {
+    _preloadAllowed = true;
+    if (_active || _starting != null) return;
+    try {
+      final ready = await _warmVoice.prepare();
+      if (ready && _preloadAllowed && !_active && _starting == null) {
+        onStatus('Motor de voz pronto · microfone desligado');
+      }
+    } catch (e) {
+      voiceTrace.add('asr_preload_error', {'message': '$e'});
+    }
+  }
+
+  Future<void> releasePreparedVoice() async {
+    _preloadAllowed = false;
+    await _warmVoice.release();
+  }
+
   Future<void> start({required bool followVoice, bool saveAudio = true}) async {
+    // Avoid opening a second recorder while the previous one is closing.
+    final stopping = _stopping;
+    if (stopping != null) await stopping;
     if (_active) {
       if (saveAudio && _writer == null) {
         throw StateError('A captura atual não grava arquivo. Reinicie a sessão.');
@@ -101,7 +145,19 @@ class SharedAudioCapture {
       if (followVoice) {
         // Preferir hipóteses parciais de streaming quando presentes no build.
         // Se a inicialização não funcionar, usar Whisper sem perder a câmera.
-        if (await StreamingModelFiles.isBundled()) {
+        final cached = await _warmVoice.take();
+        if (cached != null) {
+          try {
+            cached.resume();
+            _recognizer = cached;
+            recognizerName = 'Streaming pt-BR';
+            voiceTrace.add('asr_reused', {'metrics': cached.metrics});
+          } catch (e) {
+            await cached.stop();
+            voiceTrace.add('asr_reuse_error', {'message': '$e'});
+          }
+        }
+        if (_recognizer == null && await StreamingModelFiles.isBundled()) {
           final online = StreamingAsrWorker(
             onText: onTranscript,
             onStatus: onStatus,
@@ -203,13 +259,13 @@ class SharedAudioCapture {
     }
   }
 
-  Future<CapturedAudio?> stop() async {
+  Future<CapturedAudio?> stop({bool keepPrepared = false}) async {
     if (_starting != null) {
       try { await _starting; } catch (_) { return null; }
     }
     if (_stopping != null) return _stopping;
     if (!_active) return null;
-    final pending = _stopInternal();
+    final pending = _stopInternal(keepPrepared: keepPrepared);
     _stopping = pending;
     try {
       return await pending;
@@ -218,8 +274,12 @@ class SharedAudioCapture {
     }
   }
 
-  Future<CapturedAudio?> _stopInternal() async {
+  Future<CapturedAudio?> _stopInternal({required bool keepPrepared}) async {
     final writer = _writer;
+    final worker = _recognizer;
+    // Stop ASR callbacks immediately, while the recorder still drains WAV.
+    _transcribing = false;
+    if (keepPrepared && worker is StreamingAsrWorker) worker.suspend();
     try {
       await _recorder?.stop();
       await _subscription?.cancel();
@@ -234,21 +294,30 @@ class SharedAudioCapture {
         sampleRate: sampleRate,
       );
     } finally {
-      await _recognizer?.stop();
-      await _recorder?.dispose();
+      try {
+        if (keepPrepared && _preloadAllowed && worker is StreamingAsrWorker) {
+          await _warmVoice.store(worker);
+          voiceTrace.add('asr_cached');
+        } else {
+          await worker?.stop();
+        }
+      } finally {
+        await _recorder?.dispose();
+      }
       _recorder = null;
       _subscription = null;
       _writer = null;
       _recognizer = null;
       _active = false;
       _transcribing = false;
-      onStatus('Microfone liberado');
+      onStatus(keepPrepared && _preloadAllowed && worker is StreamingAsrWorker
+          ? 'Motor de voz pronto · microfone desligado' : 'Microfone liberado');
     }
   }
 
-  Future<void> discard() async {
+  Future<void> discard({bool keepPrepared = false}) async {
     final path = currentWavPath;
-    try { await stop(); } finally {
+    try { await stop(keepPrepared: keepPrepared); } finally {
       if (path != null && await File(path).exists()) {
         await File(path).delete();
       }

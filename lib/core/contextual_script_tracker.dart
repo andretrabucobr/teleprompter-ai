@@ -33,20 +33,22 @@ class ContextualScriptTracker {
     if (!isFinal && key == _lastPartial) return state;
     if (isFinal && _lastPartial == null && key == _lastFinal) return state;
     var target = _walk(heard, _confirmed, adjacentOnly);
+    var recoveredPrefix = false;
     if (!adjacentOnly && target == _confirmed) {
       // A speech hypothesis can begin after a skipped title or sentence.
       // Anchor its PREFIX, not its moving tail: longer partials must keep
       // following the same passage even after the first 8 words.
-      final prefixAnchor = _localPrefixAnchor(heard);
+      final prefixAnchor = _localPrefixAnchor(heard, allowRewind: allowRewind);
       if (prefixAnchor != null) {
         target = _walk(heard, prefixAnchor, false);
+        recoveredPrefix = true;
       } else {
         final recovered = _recover(heard, allowRewind, isFinal);
         if (recovered != null) target = recovered;
       }
     }
     _display = target;
-    _highlight = target == _confirmed ? _confirmedHighlight : target;
+    _highlight = target == _confirmed && !recoveredPrefix ? _confirmedHighlight : target;
     if (isFinal) {
       _confirmed = target;
       _confirmedHighlight = _highlight;
@@ -100,6 +102,15 @@ class ContextualScriptTracker {
       // be compared for ambiguity by _localPrefixAnchor. A greedy skip here
       // would select the first repeated phrase and bypass that protection.
       if (cursor == anchor) break;
+      // A single mistranscribed word must not block the whole remainder.
+      // Advance only when two following script words actually match.
+      final afterError = _match(next + 1, heard, i + 1);
+      if (afterError > 0 && _match(next + 2, heard, i + 1 + afterError) > 0) {
+        cursor = next + 1;
+        i += 1 + afterError;
+        exactAnchor = true;
+        continue;
+      }
       var found = false;
       for (var skip = 1; skip <= 2 && next + skip < words.length; skip++) {
         final length = _match(next + skip, heard, i);
@@ -119,12 +130,14 @@ class ContextualScriptTracker {
   /// Two exact consecutive words in a unique nearby passage are enough.
   /// If a longer prefix disambiguates repetitions, prefer that evidence.
   /// Never skip based on a single isolated word.
-  int? _localPrefixAnchor(List<String> heard) {
+  int? _localPrefixAnchor(List<String> heard, {required bool allowRewind}) {
     if (heard.length < 2) return null;
     var bestCount = 1;
     int? best;
     var tied = false;
-    final first = _confirmed + 2;
+    final first = allowRewind
+        ? (_confirmed - 48).clamp(0, words.length).toInt()
+        : _confirmed + 2;
     final last = (_confirmed + 8).clamp(0, words.length - 1).toInt();
     for (var start = first; start <= last; start++) {
       var offset = 0;
@@ -137,6 +150,11 @@ class ContextualScriptTracker {
         at++;
         count++;
       }
+      // Reopening a passage needs stronger evidence than a forward skip.
+      // Three consecutive words at the very beginning can recover a
+      // deliberately restarted script; elsewhere require four.
+      final minimum = start <= _confirmed ? (start == 0 ? 3 : 4) : 2;
+      if (start == _confirmed + 1 || count < minimum) continue;
       if (count > bestCount) {
         bestCount = count;
         best = start - 1;

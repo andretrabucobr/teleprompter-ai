@@ -59,6 +59,26 @@ void main() {
     expect(t.accept('este texto', isFinal: false).highlight, 3);
     expect(t.accept('este texto azul', isFinal: true).confirmed, 4);
   });
+  test('log build 27: retomada do início com cursor no segundo parágrafo', () {
+    final t = ContextualScriptTracker(
+      'Olá bom dia Hoje eu vou falar com você sobre um novo projeto A ideia é simples',
+      anchor: 12);
+    expect(t.accept('Olá', isFinal: false).highlight, -1);
+    expect(t.accept('Olá bom dia', isFinal: false).highlight, 2);
+    expect(t.accept('Olá bom dia hoje eu vou', isFinal: false).highlight, 5);
+    expect(t.accept('Olá bom dia hoje eu vou falar com você sobre um novo projeto', isFinal: false).highlight, 12);
+    expect(t.accept('Olá bom dia hoje eu vou falar com você sobre um novo projeto', isFinal: true).confirmed, 12);
+  });
+  test('log build 27: uma substituição antes de número não paralisa o cursor', () {
+    final t = ContextualScriptTracker('Temos 3 etapas e 25 minutos para apresentar a proposta');
+    expect(t.accept('Temos três etapas de vinte e cinco minutos', isFinal: false).highlight, 5);
+    expect(t.accept('Temos três etapas de vinte e cinco minutos para apresentar a proposta', isFinal: true).confirmed, 9);
+  });
+  test('log build 27: recupera após substituição de ler por olhar', () {
+    final t = ContextualScriptTracker('Eu quero ler cada palavra com calma');
+    expect(t.accept('Eu quero olhar cada palavra', isFinal: false).highlight, 4);
+    expect(t.accept('Eu quero olhar cada palavra com calma', isFinal: true).confirmed, 6);
+  });
   test('sem avanço por palavra fora de contexto', () {
     final t = ContextualScriptTracker('a casa fica bonita');
     expect(t.accept('bonita', isFinal: false).highlight, -1);

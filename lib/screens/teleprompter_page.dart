@@ -790,6 +790,11 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     if (_matcher.words.isEmpty || !mounted) return;
     final next = index.clamp(0, _matcher.words.length - 1).toInt();
     voiceTrace.add('seek', {'from': _focusIndex, 'to': next});
+    if (!reposition && next == _focusIndex) {
+      _manualScrolling = false;
+      voiceTrace.add('seek_noop', {'index': next});
+      return;
+    }
     if (next != _focusIndex) _undoIndex = _focusIndex;
     _manualScrolling = false;
     _voiceScrollEpoch++;
@@ -1041,8 +1046,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     try {
       final json = voiceTrace.exportJson();
       final dir = await Directory.systemTemp.createTemp('flowtext_trace_');
-      final file = await File('${dir.path}/flowtext_build27_log.json').writeAsString(json, flush: true);
-      await SharePlus.instance.share(ShareParams(files: [XFile(file.path)], text: 'Diagnóstico FlowText Build 27'));
+      final file = await File('${dir.path}/flowtext_build28_log.json').writeAsString(json, flush: true);
+      await SharePlus.instance.share(ShareParams(files: [XFile(file.path)], text: 'Diagnóstico FlowText Build 28'));
     } catch (e) {
       if (mounted) _notice('Falha ao exportar diagnóstico: $e');
     }
@@ -1440,6 +1445,11 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                   tooltip: 'Avançar parágrafo',
                   onPressed: () => _seekParagraph(1),
                   icon: const Icon(Icons.fast_forward),
+                ),
+                IconButton(
+                  tooltip: 'Voltar ao início do roteiro',
+                  onPressed: _playPending ? null : () => _seekTo(0),
+                  icon: const Icon(Icons.restart_alt),
                 ),
                 if (_mode == PrompterMode.camera)
                   IconButton(

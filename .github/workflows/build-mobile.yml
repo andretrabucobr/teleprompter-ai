@@ -1,13 +1,13 @@
-name: Oitosete FlowText 0.10.0 — Build 28
+name: Oitosete FlowText 0.10.0 — Build 29
 
 # Execute manualmente para controlar uso de minutos e downloads grandes.
 on:
   workflow_dispatch:
     inputs:
       modelo:
-        description: 'Padrão estável: Nemotron 560 ms (streaming)'
+        description: 'Teste de latência: Nemotron 320 ms (streaming_320); referência 560 ms (streaming)'
         required: true
-        default: 'streaming'
+        default: 'streaming_320'
         type: choice
         options: [streaming_80, streaming_160, streaming_320, streaming, streaming_leve, base, tiny, small]
       tipo_apk:

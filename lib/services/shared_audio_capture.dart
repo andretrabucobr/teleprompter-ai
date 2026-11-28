@@ -190,10 +190,9 @@ class SharedAudioCapture {
   }
 
   void resetFollowing() {
-    if (_transcribing) {
-      _recognizer?.suspend();
-      _recognizer?.resume();
-    }
+    // Both active ASR implementations reset their epoch and PCM on resume.
+    // One reset per manual seek; suspend + resume previously reset twice.
+    if (_transcribing) _recognizer?.resume();
   }
 
   /// Suspende a leitura inteligente, mas mantém o microfone e o WAV gravando.

@@ -18,7 +18,9 @@ import 'voice_trace.dart';
 /// de 8 MiB durante o build para não carregar tudo em RAM no primeiro uso.
 /// Modelo de teste: pode exigir muito processamento em aparelhos antigos.
 class StreamingModelFiles {
-  const StreamingModelFiles(this.encoder, this.decoder, this.joiner, this.tokens);
+  const StreamingModelFiles(this.encoder, this.decoder, this.joiner, this.tokens, {this.modelId = 'unknown'});
+
+  final String modelId;
 
   final String encoder;
   final String decoder;
@@ -125,6 +127,7 @@ class StreamingModelFiles {
       '${dir.path}/decoder.int8.onnx',
       '${dir.path}/joiner.int8.onnx',
       '${dir.path}/tokens.txt',
+      modelId: modelId,
     );
   }
 }
@@ -197,7 +200,7 @@ class StreamingAsrWorker implements AsrWorker {
           _startupMs = startup.elapsedMilliseconds;
           _warmupMs = event['warmupMs'] as int? ?? 0;
           _clock..reset()..start();
-          voiceTrace.add('asr_ready', {'startup_ms': _startupMs, 'warmup_ms': _warmupMs, 'threads': _threads});
+          voiceTrace.add('asr_ready', {'startup_ms': _startupMs, 'warmup_ms': _warmupMs, 'threads': _threads, 'model': files.modelId});
           if (!ready.isCompleted) ready.complete();
           onStatus('Reconhecimento STREAMING pt-BR pronto.');
         case 'ack':

@@ -131,6 +131,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   String _lastRecognizedText = '';
   List<AsrWordTiming>? _currentTimedWords;
   double _currentAudioEndMs = 0;
+  int _timedReplayGeneration = 0;
   String _firstRawHypothesis = '';
   String _firstMatchedWord = '';
   final Stopwatch _voiceSessionClock = Stopwatch();
@@ -463,9 +464,18 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       adjacentOnly: decision == VoiceScrollDecision.highlightOnly,
       allowRewind: streaming && decision == VoiceScrollDecision.advance,
     );
-    final update = timedUpdate?.state ?? _tracker.accept(heard, isFinal: isFinal,
+    final timedMatches = timedUpdate?.matches ?? const <TimedScriptWordMatch>[];
+    final fullUpdate = timedUpdate?.state ?? _tracker.accept(heard, isFinal: isFinal,
       adjacentOnly: decision == VoiceScrollDecision.highlightOnly,
       allowRewind: streaming && decision == VoiceScrollDecision.advance);
+    // Quando o decoder entrega várias palavras de uma vez, percorre os destaques
+    // na ordem temporal original, um por frame, em vez de saltar para a cauda.
+    final replayMatches = timedMatches.length > 1
+        ? timedMatches
+        : const <TimedScriptWordMatch>[];
+    final update = replayMatches.isEmpty
+        ? fullUpdate
+        : TrackingUpdate(fullUpdate.confirmed, replayMatches.first.index, replayMatches.first.index);
     final changed = update.highlight != _highlightIndex;
     if (voiceTrace.enabled) voiceTrace.add('alignment', {
       'duration_us': Timeline.now - alignmentStart,
@@ -524,6 +534,45 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       // lida, mas NÃO altera a posição visual durante a pausa.
       _broadcast();
     }
+    if (replayMatches.length > 1) {
+      _replayTimedMatches(replayMatches.skip(1).toList(growable: false), decision);
+    }
+  }
+
+  void _replayTimedMatches(
+    List<TimedScriptWordMatch> matches,
+    VoiceScrollDecision decision,
+  ) {
+    final generation = ++_timedReplayGeneration;
+    final epoch = _voiceScrollEpoch;
+    var cursor = 0;
+    void nextFrame(Duration _) {
+      if (!mounted || generation != _timedReplayGeneration ||
+          epoch != _voiceScrollEpoch || !_playing || cursor >= matches.length) {
+        return;
+      }
+      final match = matches[cursor++];
+      if (match.index <= _highlightIndex) {
+        WidgetsBinding.instance.scheduleFrameCallback(nextFrame);
+        return;
+      }
+      _highlightIndex = match.index;
+      _focusIndex = (match.index + 1).clamp(0, _matcher.words.length - 1).toInt();
+      if (voiceTrace.enabled) {
+        voiceTrace.add('timed_word_replay', {
+          'index': match.index,
+          'word': _matcher.words[match.index].text,
+          'start_ms': (match.startSeconds * 1000).round(),
+          'end_ms': (match.endSeconds * 1000).round(),
+          'audio_end_ms': _currentAudioEndMs,
+          'frame_sequence': cursor,
+        });
+      }
+      if (decision == VoiceScrollDecision.advance) _scrollToFocus();
+      _broadcast();
+      WidgetsBinding.instance.scheduleFrameCallback(nextFrame);
+    }
+    WidgetsBinding.instance.scheduleFrameCallback(nextFrame);
   }
 
   void _onSpeechActivity(bool active) {
@@ -758,6 +807,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   }
 
   Future<void> _pause() async {
+    _timedReplayGeneration++;
     voiceTrace.add('pause', {'metrics': _capture.voiceMetrics});
     // Não solta o microfone enquanto a inicialização do vídeo está em curso.
     if (_recordingBusy && !_recording) return;
@@ -831,6 +881,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
 
   void _seekTo(int index, {bool reposition = true}) {
     if (_matcher.words.isEmpty || !mounted) return;
+    _timedReplayGeneration++;
     final next = index.clamp(0, _matcher.words.length - 1).toInt();
     voiceTrace.add('seek', {'from': _focusIndex, 'to': next});
     if (!reposition && next == _focusIndex) {

@@ -13,15 +13,6 @@ void main() {
         VoiceScrollDecision.ignore);
   });
 
-  test('primeira evidência PCM permite destaque sem rolagem antes do VAD', () {
-    final gate = VoiceScrollGate();
-    expect(gate.decide(hasActivityDetector: true, initialSpeechEvidence: true, at: t0),
-        VoiceScrollDecision.highlightOnly);
-    expect(gate.isSpeaking, isFalse);
-    gate.onSpeechActivity(true, at: t0);
-    expect(gate.decide(hasActivityDetector: true, at: t0), VoiceScrollDecision.advance);
-  });
-
   test('ao falar o reconhecimento pode avançar; silêncio congela a tela', () {
     final gate = VoiceScrollGate();
     gate.onSpeechActivity(true, at: t0);
@@ -50,18 +41,6 @@ void main() {
     expect(gate.decide(hasActivityDetector: true,
         at: t0.add(const Duration(seconds: 3))),
         VoiceScrollDecision.advance);
-  });
-
-  test('primeira hipótese tardia não é perdida, nem move viewport', () {
-    final gate = VoiceScrollGate();
-    gate.onSpeechActivity(true, at: t0);
-    gate.onSpeechActivity(false, at: t0.add(const Duration(seconds: 1)));
-    final decision = gate.decide(hasActivityDetector: true,
-        allowFirstLateHighlight: true, at: t0.add(const Duration(milliseconds: 2500)));
-    expect(decision, VoiceScrollDecision.highlightOnly);
-    gate.onConfirmed(decision);
-    expect(gate.decide(hasActivityDetector: true, allowFirstLateHighlight: true,
-        at: t0.add(const Duration(milliseconds: 2600))), VoiceScrollDecision.ignore);
   });
 
   test('recomeço limpa a autorização de resultados antigos', () {

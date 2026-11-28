@@ -8,6 +8,7 @@ import 'package:record/record.dart';
 import 'wav_pcm_writer.dart';
 import 'voice_trace.dart';
 import 'asr_worker.dart';
+import '../core/asr_word_timing.dart';
 import 'streaming_asr_worker.dart';
 import 'whisper_asr_worker.dart';
 import 'warm_voice_cache.dart';
@@ -32,12 +33,14 @@ class SharedAudioCapture {
     required this.onTranscript,
     required this.onStatus,
     this.onSpeechActivity,
+    this.onTimedTranscript,
   });
 
   static const int sampleRate = 16000;
   final void Function(String transcript, bool isFinal) onTranscript;
   final void Function(String status) onStatus;
   final void Function(bool speaking)? onSpeechActivity;
+  final void Function(String transcript, bool isFinal, List<AsrWordTiming> words, double audioEndMs)? onTimedTranscript;
 
   AudioRecorder? _recorder;
   StreamSubscription<Uint8List>? _subscription;
@@ -75,7 +78,7 @@ class SharedAudioCapture {
   Future<StreamingAsrWorker?> _createPreparedStreaming() async {
     if (!_preloadAllowed || !await StreamingModelFiles.isBundled()) return null;
     final worker = StreamingAsrWorker(onText: onTranscript, onStatus: onStatus,
-      onSpeechActivity: onSpeechActivity);
+      onSpeechActivity: onSpeechActivity, onTimedTranscript: onTimedTranscript);
     final clock = Stopwatch()..start();
     voiceTrace.add('asr_preload_start');
     try {
@@ -164,6 +167,7 @@ class SharedAudioCapture {
             onText: onTranscript,
             onStatus: onStatus,
             onSpeechActivity: onSpeechActivity,
+            onTimedTranscript: onTimedTranscript,
           );
           try {
             await online.start();

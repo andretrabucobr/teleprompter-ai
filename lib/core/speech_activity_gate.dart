@@ -5,8 +5,6 @@ import 'dart:typed_data';
 /// ruído contínuo e voz muito baixa exigem testes e calibração nos aparelhos.
 /// PCM16 mono, 16 kHz, janelas de 20 ms.
 class SpeechActivityGate {
-  SpeechActivityGate({this.minimumSpeechFrames = 4});
-  final int minimumSpeechFrames;
   static const int sampleRate = 16000;
   static const int samplesPerFrame = 320;
   static const int historyFrames = 300; // 6 s
@@ -33,8 +31,7 @@ class SpeechActivityGate {
 
   /// Atividade atual com 0,4 s de tolerância a pequenas pausas entre sílabas.
   /// Não é VAD neural: o resultado depende do ruído do ambiente.
-  bool get hasRecentSpeechEvidence => _frameCount - _lastSpeechFrame <= 20;
-  bool get currentlySpeaking => _speechFrames >= minimumSpeechFrames &&
+  bool get currentlySpeaking => _speechFrames >= 4 &&
       (_frameCount - _lastSpeechFrame) <= 20;
 
   void addPcm(Uint8List bytes) {

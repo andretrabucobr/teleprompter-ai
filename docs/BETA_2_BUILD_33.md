@@ -1,1 +1,0 @@
-Build 33 fixes the Build 32 analyzer error by exposing WarmVoiceCache.isReady, and clears microphone capture session IDs after stop to avoid duplicate stop events. Diagnostic feature retained: opt-in JSON + exact Nemotron PCM WAV capture, 4-minute cap, local-only until explicit export. Version 0.10.0+33. Test workflow: Android release_arm64, streaming_320.

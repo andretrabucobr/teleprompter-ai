@@ -9,6 +9,7 @@ import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
+import '../core/asr_word_timing.dart';
 import '../core/pcm_frame_accumulator.dart';
 import '../core/speech_activity_gate.dart';
 import 'asr_worker.dart';
@@ -139,11 +140,13 @@ class StreamingAsrWorker implements AsrWorker {
     required this.onText,
     required this.onStatus,
     this.onSpeechActivity,
+    this.onTimedTranscript,
   });
 
   final void Function(String text, bool isFinal) onText;
   final void Function(String status) onStatus;
   final void Function(bool speaking)? onSpeechActivity;
+  final void Function(String text, bool isFinal, List<AsrWordTiming> words, double audioEndMs)? onTimedTranscript;
 
   final PcmFrameAccumulator _frames = PcmFrameAccumulator(frameBytes: 1600); // 50 ms: menor overhead de mensagens
   final SpeechActivityGate _gate = SpeechActivityGate(minimumSpeechFrames: 2);
@@ -229,7 +232,15 @@ class StreamingAsrWorker implements AsrWorker {
                 'text': value, 'final': event['final'] == true,
                 'worker_emitted_us': event['emittedUs'], 'pending_ms': _queuedBytes / 32,
               });
-              onText(value, event['final'] == true);
+              final isFinal = event['final'] == true;
+              final tokenValues = (event['tokens'] as List?)?.cast<String>() ?? const <String>[];
+              final timeValues = (event['timestamps'] as List?)?.map((value) => (value as num).toDouble()).toList() ?? const <double>[];
+              final timedWords = SentencePieceWordDecoder.decode(tokenValues, timeValues);
+              if (onTimedTranscript != null && timedWords.isNotEmpty) {
+                onTimedTranscript!(value, isFinal, timedWords, (event['audioEndMs'] as num?)?.toDouble() ?? 0);
+              } else {
+                onText(value, isFinal);
+              }
               if (!_firstPartialReported && _speechOnsetMs != null) {
                 _firstPartialReported = true;
                 final elapsed = _clock.elapsedMilliseconds - _speechOnsetMs!;
@@ -419,6 +430,7 @@ Future<void> _streamingIsolateMain(Map<String, Object> config) async {
     events.send(<String, Object>{'type': 'ready', 'port': commands.sendPort,
       'warmupMs': warmup.elapsedMilliseconds});
     var lastPartial = '';
+    var lastTimedSignature = '';
     await for (final dynamic event in commands) {
       if (event is! Map) continue;
       if (event['type'] == 'stop') {
@@ -428,6 +440,7 @@ Future<void> _streamingIsolateMain(Map<String, Object> config) async {
       if (event['type'] == 'reset') {
         recognizer.reset(stream);
         lastPartial = '';
+        lastTimedSignature = '';
         continue;
       }
       if (event['type'] != 'audio') continue;
@@ -455,11 +468,15 @@ Future<void> _streamingIsolateMain(Map<String, Object> config) async {
           decodeMs ??= decodeClock.elapsedMilliseconds;
           decoded = true;
           // Entregue cada hipótese alterada sem esperar drenar o áudio pronto.
-          final partial = recognizer.getResult(stream).text.trim();
-          if (partial.isNotEmpty && partial != lastPartial) {
+          final snapshot = recognizer.getResult(stream);
+          final partial = snapshot.text.trim();
+          final timedSignature = '${snapshot.tokens.join('|')}@${snapshot.timestamps.join('|')}';
+          if (partial.isNotEmpty && (partial != lastPartial || timedSignature != lastTimedSignature)) {
             lastPartial = partial;
+            lastTimedSignature = timedSignature;
             events.send(<String, Object>{
               'type': 'result', 'text': partial,
+              'tokens': snapshot.tokens, 'timestamps': snapshot.timestamps,
               'epoch': epoch, 'final': false,
               'frame': event['frame'], 'audioEndMs': event['audioEndMs'], 'emittedUs': Timeline.now,
             });
@@ -471,12 +488,15 @@ Future<void> _streamingIsolateMain(Map<String, Object> config) async {
             if (current.isNotEmpty) {
               events.send(<String, Object>{
                 'type': 'result', 'text': current,
+                'tokens': recognizer.getResult(stream).tokens,
+                'timestamps': recognizer.getResult(stream).timestamps,
                 'epoch': epoch, 'final': true,
                 'frame': event['frame'], 'audioEndMs': event['audioEndMs'], 'emittedUs': Timeline.now,
               });
             }
             recognizer.reset(stream);
             lastPartial = '';
+            lastTimedSignature = '';
           }
         }
       } catch (error) {

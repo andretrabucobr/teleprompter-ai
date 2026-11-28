@@ -1,4 +1,4 @@
-# Compilação online otimizada — Oitosete FlowText 0.10.0
+# Compilação online otimizada — Oitosete FlowText 0.9.4
 
 Use o **GitHub Actions** para gerar um APK Android em release, ARM64. O fluxo foi atualizado para selecionar o reconhecimento e produzir um relatório real do tamanho do arquivo.
 

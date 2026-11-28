@@ -30,8 +30,6 @@ class StreamingInstallerTests(unittest.TestCase):
             manifest = m.extract_model(archive, folder,
                                        minimum_size={k: 1 for k in sizes},
                                        part_bytes=16)
-            self.assertEqual(manifest['model'], m.MODEL)
-            self.assertEqual(len(m.VARIANTS), 4)
             self.assertEqual(manifest['encoderParts'],
                              [f'encoder.part{i:03d}' for i in range(5)])
             self.assertEqual(len(b''.join((folder / p).read_bytes() for p in manifest['encoderParts'])), 70)

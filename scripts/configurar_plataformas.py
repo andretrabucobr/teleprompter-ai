@@ -130,7 +130,6 @@ def configurar_android() -> None:
         'android.permission.RECORD_AUDIO',
         'android.permission.ACCESS_NETWORK_STATE',
         'android.permission.ACCESS_WIFI_STATE',
-        'android.permission.CHANGE_WIFI_MULTICAST_STATE',
     ):
         if f'android:name="{permission}"' not in content:
             content = content.replace(
@@ -167,44 +166,8 @@ def configurar_android() -> None:
             value = value.replace('minSdkVersion flutter.minSdkVersion', 'minSdkVersion 24')
             gradle.write_text(value, encoding='utf-8')
             break
-    configurar_nome_local_android()
     configurar_icone_android()
     print('Android: permissões e SDK mínimo configurados (API 24).')
-
-
-def configurar_nome_local_android() -> None:
-    # flutter create gera MainActivity; preserve o package real do projeto.
-    main = ROOT / 'android/app/src/main'
-    candidates = list(main.glob('kotlin/**/MainActivity.kt'))
-    if not candidates:
-        print('Android: MainActivity Kotlin ausente; endereço IP permanece disponível.')
-        return
-    if len(candidates) != 1:
-        raise SystemExit('MainActivity Kotlin ambígua.')
-    activity = candidates[0]
-    source = activity.read_text(encoding='utf-8')
-    match = re.search(r'(?m)^package\s+([\w.]+)\s*$', source)
-    if not match:
-        raise SystemExit('Não foi possível identificar package de MainActivity.')
-    package = match.group(1)
-    template = ROOT / 'scripts/native/FlowTextMainActivity.kt'
-    activity.write_text(template.read_text(encoding='utf-8').replace('__PACKAGE__', package),
-                        encoding='utf-8')
-    gradle = ROOT / 'android/app/build.gradle.kts'
-    if gradle.is_file():
-        content = gradle.read_text(encoding='utf-8')
-        marker = '// FlowText mDNS'
-        if marker not in content:
-            content += '\n' + marker + '\ndependencies { implementation("org.jmdns:jmdns:3.5.10") }\n'
-            gradle.write_text(content, encoding='utf-8')
-    else:
-        gradle = ROOT / 'android/app/build.gradle'
-        if not gradle.is_file():
-            raise SystemExit('Gradle Android não encontrado.')
-        content = gradle.read_text(encoding='utf-8')
-        if '// FlowText mDNS' not in content:
-            content += '\n// FlowText mDNS\ndependencies { implementation "org.jmdns:jmdns:3.5.10" }\n'
-            gradle.write_text(content, encoding='utf-8')
 
 
 def configurar_ios() -> None:

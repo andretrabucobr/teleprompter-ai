@@ -11,6 +11,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import '../core/asr_word_timing.dart';
 import '../core/script_matcher.dart';
 import '../core/reading_navigation.dart';
 import '../core/app_colors.dart';
@@ -60,6 +61,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   );
   late final SharedAudioCapture _capture = SharedAudioCapture(
     onTranscript: _onTranscript,
+    onTimedTranscript: _onTimedTranscript,
     onSpeechActivity: _onSpeechActivity,
     onStatus: (status) {
       if (mounted) setState(() => _voiceStatus = status);
@@ -127,6 +129,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   bool _pendingVoiceActivity = false;
   String _voiceStatus = 'Inativo';
   String _lastRecognizedText = '';
+  List<AsrWordTiming>? _currentTimedWords;
+  double _currentAudioEndMs = 0;
   String _firstRawHypothesis = '';
   String _firstMatchedWord = '';
   final Stopwatch _voiceSessionClock = Stopwatch();
@@ -394,6 +398,21 @@ class _TeleprompterPageState extends State<TeleprompterPage>
         'voiceListening': _capture.followingVoice || _speech.running,
       };
 
+  void _onTimedTranscript(
+    String transcript,
+    bool isFinal,
+    List<AsrWordTiming> words,
+    double audioEndMs,
+  ) {
+    _currentTimedWords = words;
+    _currentAudioEndMs = audioEndMs;
+    try {
+      _onTranscript(transcript, isFinal);
+    } finally {
+      _currentTimedWords = null;
+    }
+  }
+
   void _onTranscript(String transcript, bool isFinal) {
     if (voiceTrace.enabled) voiceTrace.add('transcript_callback', {'text': transcript, 'final': isFinal, 'playing': _playing, 'pending': _playPending, 'manual': _manualScrolling, 'resetting': _resettingVoice, 'mode': _scrollMode.name});
     if ((!_playing && !_playPending) || _scrollMode != ScrollMode.voice || !mounted ||
@@ -437,11 +456,27 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     }
 
     final alignmentStart = Timeline.now;
-    final update = _tracker.accept(heard, isFinal: isFinal,
+    final timedWords = _currentTimedWords;
+    final timedUpdate = timedWords == null ? null : _tracker.acceptTimedWords(
+      timedWords,
+      isFinal: isFinal,
+      adjacentOnly: decision == VoiceScrollDecision.highlightOnly,
+      allowRewind: streaming && decision == VoiceScrollDecision.advance,
+    );
+    final update = timedUpdate?.state ?? _tracker.accept(heard, isFinal: isFinal,
       adjacentOnly: decision == VoiceScrollDecision.highlightOnly,
       allowRewind: streaming && decision == VoiceScrollDecision.advance);
     final changed = update.highlight != _highlightIndex;
-    if (voiceTrace.enabled) voiceTrace.add('alignment', {'duration_us': Timeline.now - alignmentStart, 'confirmed': update.confirmed, 'display': update.display, 'highlight': update.highlight, 'changed': changed, 'word': update.highlight >= 0 && update.highlight < _matcher.words.length ? _matcher.words[update.highlight].text : null});
+    if (voiceTrace.enabled) voiceTrace.add('alignment', {
+      'duration_us': Timeline.now - alignmentStart,
+      'confirmed': update.confirmed, 'display': update.display,
+      'highlight': update.highlight, 'changed': changed,
+      'timed_words': timedWords?.length ?? 0,
+      'timed_matches': timedUpdate?.matches.length ?? 0,
+      'timed_revision': timedUpdate?.revised ?? false,
+      'audio_end_ms': _currentAudioEndMs,
+      'word': update.highlight >= 0 && update.highlight < _matcher.words.length ? _matcher.words[update.highlight].text : null,
+    });
     if (update.confirmed != _readingCursor.confirmedIndex) {
       _readingCursor.seek(update.confirmed);
     }

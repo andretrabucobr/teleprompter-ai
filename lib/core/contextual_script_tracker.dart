@@ -1,5 +1,32 @@
+import 'asr_word_timing.dart';
 import 'script_matcher.dart';
 import 'spoken_forms_pt.dart';
+
+class TimedScriptWordMatch {
+  const TimedScriptWordMatch({
+    required this.index,
+    required this.startSeconds,
+    required this.endSeconds,
+    required this.recognizedText,
+    required this.heardStartIndex,
+    required this.heardEndIndex,
+  });
+
+  final int index;
+  final double startSeconds;
+  final double endSeconds;
+  final String recognizedText;
+  final int heardStartIndex;
+  final int heardEndIndex;
+}
+
+class TimedTrackingUpdate {
+  const TimedTrackingUpdate(this.state, this.matches, {this.revised = false});
+
+  final TrackingUpdate state;
+  final List<TimedScriptWordMatch> matches;
+  final bool revised;
+}
 
 class TrackingUpdate {
   const TrackingUpdate(this.confirmed, this.display, this.highlight);
@@ -22,8 +49,185 @@ class ContextualScriptTracker {
   late final List<List<List<String>>> _forms;
   int _confirmed, _display, _confirmedHighlight, _highlight;
   String? _lastPartial, _lastFinal;
+  String? _lastTimedPartial, _lastTimedFinal;
 
   TrackingUpdate get state => TrackingUpdate(_confirmed, _display, _highlight);
+
+  /// Alinha palavras reconstruídas dos tokens, preservando a ordem e os tempos.
+  /// A hipótese continua cumulativa; somente a extensão nova é devolvida à UI.
+  TimedTrackingUpdate acceptTimedWords(
+    List<AsrWordTiming> timedWords, {
+    required bool isFinal,
+    bool adjacentOnly = false,
+    bool allowRewind = true,
+  }) {
+    final valid = <AsrWordTiming>[];
+    final heard = <String>[];
+    for (final word in timedWords) {
+      final normalized = ScriptMatcher.normalize(word.text);
+      if (normalized.isEmpty) continue;
+      valid.add(word);
+      heard.add(normalized);
+    }
+    if (heard.isEmpty || words.isEmpty) {
+      return TimedTrackingUpdate(state, const []);
+    }
+
+    final key = heard.join(' ');
+    final previous = _lastTimedPartial;
+    if (!isFinal && key == previous) {
+      return TimedTrackingUpdate(state, const []);
+    }
+    if (isFinal && previous == null && key == _lastTimedFinal) {
+      return TimedTrackingUpdate(state, const []);
+    }
+
+    final previousWords = previous?.split(' ') ?? const <String>[];
+    var commonPrefix = 0;
+    while (commonPrefix < previousWords.length &&
+        commonPrefix < heard.length &&
+        previousWords[commonPrefix] == heard[commonPrefix]) {
+      commonPrefix++;
+    }
+    final revised = previousWords.isNotEmpty &&
+        commonPrefix < previousWords.length;
+
+    var path = _walkTimed(valid, heard, _confirmed, adjacentOnly);
+    var recoveredPrefix = false;
+    if (!adjacentOnly && (path.isEmpty || path.last.index == _confirmed)) {
+      final prefixAnchor = _localPrefixAnchor(
+        heard,
+        allowRewind: allowRewind,
+      );
+      if (prefixAnchor != null) {
+        path = _walkTimed(valid, heard, prefixAnchor, false);
+        recoveredPrefix = true;
+      } else if (path.isEmpty) {
+        final recovered = _recover(heard, allowRewind, isFinal);
+        if (recovered != null) {
+          final count = heard.length >= 4 ? 4 : 3;
+          final heardStart = heard.length - count;
+          final scriptStart = recovered - count + 1;
+          for (var i = 0; i < count; i++) {
+            final source = valid[heardStart + i];
+            path.add(TimedScriptWordMatch(
+              index: scriptStart + i,
+              startSeconds: source.startSeconds,
+              endSeconds: source.endSeconds,
+              recognizedText: source.text,
+              heardStartIndex: heardStart + i,
+              heardEndIndex: heardStart + i,
+            ));
+          }
+        }
+      }
+    }
+
+    final target = path.isEmpty ? _confirmed : path.last.index;
+    _display = target;
+    _highlight = target == _confirmed && !recoveredPrefix
+        ? _confirmedHighlight
+        : target;
+
+    if (isFinal) {
+      _confirmed = target;
+      _confirmedHighlight = _highlight;
+      _lastTimedFinal = key;
+      _lastTimedPartial = null;
+    } else {
+      _lastTimedPartial = key;
+    }
+
+    final newMatches = path
+        .where((match) => match.heardEndIndex >= commonPrefix)
+        .toList(growable: false);
+    return TimedTrackingUpdate(
+      state,
+      List.unmodifiable(newMatches),
+      revised: revised,
+    );
+  }
+
+  List<TimedScriptWordMatch> _walkTimed(
+    List<AsrWordTiming> timed,
+    List<String> heard,
+    int anchor,
+    bool adjacentOnly,
+  ) {
+    final matches = <TimedScriptWordMatch>[];
+    var cursor = anchor;
+    var i = 0;
+    var exactAnchor = false;
+
+    TimedScriptWordMatch makeMatch(int scriptIndex, int from, int length) {
+      final first = timed[from];
+      final last = timed[from + length - 1];
+      return TimedScriptWordMatch(
+        index: scriptIndex,
+        startSeconds: first.startSeconds,
+        endSeconds: last.endSeconds,
+        recognizedText: timed
+            .sublist(from, from + length)
+            .map((word) => word.text)
+            .join(' '),
+        heardStartIndex: from,
+        heardEndIndex: from + length - 1,
+      );
+    }
+
+    while (i < heard.length && cursor + 1 < words.length) {
+      final next = cursor + 1;
+      final length = _match(next, heard, i);
+      if (length > 0) {
+        matches.add(makeMatch(next, i, length));
+        cursor = next;
+        i += length;
+        exactAnchor = true;
+        continue;
+      }
+      if (adjacentOnly) break;
+
+      if (_near(heard[i], words[next].normalized) &&
+          (exactAnchor || _match(next + 1, heard, i + 1) > 0)) {
+        matches.add(makeMatch(next, i, 1));
+        cursor = next;
+        i++;
+        exactAnchor = false;
+        continue;
+      }
+      if (_match(next, heard, i + 1) > 0) {
+        i++;
+        continue;
+      }
+      if (cursor == anchor) break;
+
+      final afterError = _match(next + 1, heard, i + 1);
+      if (afterError > 0 &&
+          _match(next + 2, heard, i + 1 + afterError) > 0) {
+        matches.add(makeMatch(next + 1, i + 1, afterError));
+        cursor = next + 1;
+        i += 1 + afterError;
+        exactAnchor = true;
+        continue;
+      }
+
+      var found = false;
+      for (var skip = 1; skip <= 2 && next + skip < words.length; skip++) {
+        final skippedLength = _match(next + skip, heard, i);
+        if (skippedLength > 0 &&
+            _match(next + skip + 1, heard, i + skippedLength) > 0) {
+          matches.add(makeMatch(next + skip, i, skippedLength));
+          cursor = next + skip;
+          i += skippedLength;
+          exactAnchor = true;
+          found = true;
+          break;
+        }
+      }
+      if (!found) break;
+    }
+    return matches;
+  }
 
   TrackingUpdate accept(String transcript, {required bool isFinal,
       bool adjacentOnly = false, bool allowRewind = true}) {

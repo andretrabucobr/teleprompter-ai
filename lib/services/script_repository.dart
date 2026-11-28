@@ -10,7 +10,7 @@ class ScriptRepository {
       '''Para gravar na câmera do aplicativo, selecione Câmera.\n\n'''
       '''Para controlar de outro celular, abra Controle remoto nos dois aparelhos.''';
 
-  static const sample = '''Olá, bom dia! Hoje eu vou falar com você sobre um novo projeto.
+  static const _previousSample = '''Olá, bom dia! Hoje eu vou falar com você sobre um novo projeto.
 
 A ideia é simples. Eu quero ler cada palavra com calma e seguir o texto no meu próprio ritmo.
 
@@ -22,9 +22,31 @@ Vamos voltar a um ponto importante. A ideia é simples. Eu quero ler cada palavr
 
 Por fim, agradeço a sua atenção. Até a próxima!''';
 
+  static const sample = '''Teste de início. Hoje eu vou ler este roteiro do começo ao fim, em voz natural, sem acelerar e sem soletrar as palavras.
+
+A primeira frase precisa ser reconhecida desde a palavra hoje. O destaque deve acompanhar cada palavra na ordem em que eu falar.
+
+Agora vou repetir uma frase: a leitura precisa ser clara e o resultado precisa ser claro. A leitura precisa ser clara e o resultado precisa ser claro.
+
+Vamos testar palavras curtas: eu, tu, nós, vocês, de, do, da, em, com, sem, por e para. Eu quero ler cada palavra com calma. Eu quero ver cada palavra com calma.
+
+Vamos testar números: são 3 etapas, 25 minutos, 2 salas e 16 tarefas. A reunião começa às 9 horas e termina às 17 horas.
+
+Agora as siglas e os nomes: IA, ASR, PCM, Android, iOS e FlowText. A equipe vai comparar o áudio original com o texto reconhecido.
+
+Esta frase tem palavras parecidas: casa, caso, coisa, causa e caça. Agora vou trocar apenas uma palavra: o texto está claro. O texto está correto.
+
+Agora vou fazer uma pausa de três segundos.
+
+Voltei. Vou continuar exatamente do ponto em que parei. Não vou repetir o início.
+
+A ideia é simples, mas precisa funcionar de forma precisa. A ideia é simples, mas precisa funcionar de forma precisa.
+
+Para terminar, agradeço a atenção. Este foi o teste completo de reconhecimento e alinhamento.''';
+
   /// Atualiza somente o exemplo anterior intacto. Roteiros próprios são preservados.
   static String resolveSavedScript(String saved) =>
-      saved == _legacySample ? sample : saved;
+      saved == _legacySample || saved == _previousSample ? sample : saved;
 
   Future<File> _file() async {
     final directory = await getApplicationDocumentsDirectory();

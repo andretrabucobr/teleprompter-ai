@@ -49,6 +49,16 @@ void main() {
     expect(t.accept('este texto', isFinal: false).highlight, -1);
     expect(t.accept('este texto verde', isFinal: false).highlight, 7);
   });
+  test('omite palavras no meio após estabelecer âncora exata', () {
+    final t = ContextualScriptTracker('hoje vamos agora apresentar nosso projeto');
+    expect(t.accept('hoje apresentar nosso', isFinal: false).highlight, 4);
+    expect(t.accept('hoje apresentar nosso projeto', isFinal: true).confirmed, 5);
+  });
+  test('prefixo inicial único aceita omissão de duas palavras', () {
+    final t = ContextualScriptTracker('título principal este texto azul');
+    expect(t.accept('este texto', isFinal: false).highlight, 3);
+    expect(t.accept('este texto azul', isFinal: true).confirmed, 4);
+  });
   test('sem avanço por palavra fora de contexto', () {
     final t = ContextualScriptTracker('a casa fica bonita');
     expect(t.accept('bonita', isFinal: false).highlight, -1);

@@ -96,6 +96,10 @@ class ContextualScriptTracker {
         i++;
         continue;
       }
+      // Before an acoustic anchor is established, all skipped starts must
+      // be compared for ambiguity by _localPrefixAnchor. A greedy skip here
+      // would select the first repeated phrase and bypass that protection.
+      if (cursor == anchor) break;
       var found = false;
       for (var skip = 1; skip <= 2 && next + skip < words.length; skip++) {
         final length = _match(next + skip, heard, i);

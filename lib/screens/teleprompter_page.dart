@@ -130,6 +130,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   final Stopwatch _voiceSessionClock = Stopwatch();
   int? _firstRawMs;
   int? _firstMatchMs;
+  int? _firstVoiceMs;
   String? _cameraError;
   String? _latestVideo;
   String? _latestAudio;
@@ -406,6 +407,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     final decision = _voiceScrollGate.decide(
       hasActivityDetector: !_speech.running,
       initialSpeechEvidence: initialEvidence,
+      allowFirstLateHighlight: streaming && _firstMatchedWord.isEmpty,
     );
     if (decision == VoiceScrollDecision.ignore) {
       if (isFinal && streaming) {
@@ -482,6 +484,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   void _onSpeechActivity(bool active) {
     if (!mounted || _scrollMode != ScrollMode.voice) return;
     if (!_playing && !_playPending) return;
+    if (active) _firstVoiceMs ??= _voiceSessionClock.elapsedMilliseconds;
     _voiceScrollGate.onSpeechActivity(active);
     if (!_playing) {
       _pendingVoiceActivity = active;
@@ -639,6 +642,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     _firstMatchedWord = '';
     _firstRawMs = null;
     _firstMatchMs = null;
+    _firstVoiceMs = null;
     _voiceSessionClock..reset()..start();
     _playPending = true;
     _broadcast();
@@ -1204,9 +1208,13 @@ class _TeleprompterPageState extends State<TeleprompterPage>
 
   String get _voiceDiagnostics {
     final engine = _speech.running ? 'Reconhecimento nativo' : _capture.activeVoiceEngine;
-    final raw = _firstRawMs == null ? 'aguardando' : '$_firstRawMs ms: $_firstRawHypothesis';
-    final matched = _firstMatchMs == null ? 'aguardando' : '$_firstMatchMs ms: $_firstMatchedWord';
-    return '$engine\n1ª hipótese desde Iniciar: $raw\n1º destaque: $matched\n${_capture.voiceMetrics}';
+    String relative(int? at) {
+      final onset = _firstVoiceMs;
+      if (at == null) return 'aguardando';
+      if (onset == null || at < onset) return '$at ms desde Iniciar';
+      return '${at - onset} ms após voz';
+    }
+    return '$engine\n1ª hipótese: ${relative(_firstRawMs)} · $_firstRawHypothesis\n1º destaque: ${relative(_firstMatchMs)} · $_firstMatchedWord\n${_capture.voiceMetrics}';
   }
 
   Widget _readerControls() => Padding(

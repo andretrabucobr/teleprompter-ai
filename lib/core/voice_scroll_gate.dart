@@ -40,6 +40,7 @@ class VoiceScrollGate {
   VoiceScrollDecision decide({
     required bool hasActivityDetector,
     bool initialSpeechEvidence = false,
+    bool allowFirstLateHighlight = false,
     DateTime? at,
   }) {
     if (!hasActivityDetector) return VoiceScrollDecision.advance;
@@ -51,6 +52,11 @@ class VoiceScrollGate {
       return VoiceScrollDecision.ignore;
     }
     final delay = (at ?? DateTime.now()).difference(_lastStoppedAt!);
+    if (!delay.isNegative && allowFirstLateHighlight &&
+        delay <= const Duration(seconds: 3)) {
+      // Apenas a primeira coincidência adjacente já falada; sem rolagem.
+      return VoiceScrollDecision.highlightOnly;
+    }
     if (delay.isNegative || delay > trailingHighlightWindow) {
       return VoiceScrollDecision.ignore;
     }

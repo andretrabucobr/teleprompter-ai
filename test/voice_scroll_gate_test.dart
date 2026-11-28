@@ -52,6 +52,18 @@ void main() {
         VoiceScrollDecision.advance);
   });
 
+  test('primeira hipótese tardia não é perdida, nem move viewport', () {
+    final gate = VoiceScrollGate();
+    gate.onSpeechActivity(true, at: t0);
+    gate.onSpeechActivity(false, at: t0.add(const Duration(seconds: 1)));
+    final decision = gate.decide(hasActivityDetector: true,
+        allowFirstLateHighlight: true, at: t0.add(const Duration(milliseconds: 2500)));
+    expect(decision, VoiceScrollDecision.highlightOnly);
+    gate.onConfirmed(decision);
+    expect(gate.decide(hasActivityDetector: true, allowFirstLateHighlight: true,
+        at: t0.add(const Duration(milliseconds: 2600))), VoiceScrollDecision.ignore);
+  });
+
   test('recomeço limpa a autorização de resultados antigos', () {
     final gate = VoiceScrollGate();
     gate.onSpeechActivity(true, at: t0);

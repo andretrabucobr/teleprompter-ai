@@ -161,11 +161,13 @@ class StreamingAsrWorker implements AsrWorker {
   int _processingMicros = 0;
   int? _firstPartialDelay;
   int _startupMs = 0;
+  int _warmupMs = 0;
+  int? _firstDecodeMs;
   int _threads = 2;
   String get metrics {
     final rtf = _processedBytes == 0 ? 'aguardando' : (_processingMicros / (_processedBytes * 31.25)).toStringAsFixed(2);
     final first = _firstPartialDelay == null ? 'aguardando' : '$_firstPartialDelay ms';
-    return 'CPU: $_threads threads · RTF: $rtf\nCarga: $_startupMs ms · Primeira hipótese após voz: $first\nFila: ${(_queuedBytes / 32).round()} ms · pico: ${(_peakQueuedBytes / 32).round()} ms · descartes: $_droppedFrames';
+    return 'CPU: $_threads threads · RTF: $rtf\nCarga: $_startupMs ms (aquecimento: $_warmupMs ms)\nPrimeira inferência real: ${_firstDecodeMs ?? 0} ms · 1ª hipótese após voz: $first\nFila: ${(_queuedBytes / 32).round()} ms · pico: ${(_peakQueuedBytes / 32).round()} ms · descartes: $_droppedFrames';
   }
   final Stopwatch _clock = Stopwatch();
   int? _speechOnsetMs;
@@ -189,6 +191,7 @@ class StreamingAsrWorker implements AsrWorker {
           _running = true;
           _following = true;
           _startupMs = startup.elapsedMilliseconds;
+          _warmupMs = event['warmupMs'] as int? ?? 0;
           _clock..reset()..start();
           if (!ready.isCompleted) ready.complete();
           onStatus('Reconhecimento STREAMING pt-BR pronto.');
@@ -196,6 +199,7 @@ class StreamingAsrWorker implements AsrWorker {
           if (event['epoch'] == _epoch) {
             _processedBytes += event['bytes'] as int;
             _processingMicros += (event['micros'] as int? ?? 0);
+            if (event['decodeMs'] is int) _firstDecodeMs ??= event['decodeMs'] as int;
             _queuedBytes = (_queuedBytes - (event['bytes'] as int))
                 .clamp(0, _maxPendingBytes).toInt();
           }
@@ -303,6 +307,7 @@ class StreamingAsrWorker implements AsrWorker {
     _processedBytes = 0;
     _processingMicros = 0;
     _firstPartialDelay = null;
+    _firstDecodeMs = null;
     _speechOnsetMs = null;
     _firstPartialReported = false;
     if (_speaking) {
@@ -359,9 +364,25 @@ Future<void> _streamingIsolateMain(Map<String, Object> config) async {
       enableEndpoint: true,
       rule2MinTrailingSilence: 0.9,
     ));
+    // Execute a primeira inferência antes de anunciar que o microfone pode
+    // ser aberto. Áudio sintético de silêncio, nunca áudio do usuário.
+    final warmup = Stopwatch()..start();
+    final warmStream = recognizer.createStream();
+    try {
+      warmStream.setOption(key: 'language', value: 'pt-BR');
+      warmStream.acceptWaveform(samples: Float32List(32000), sampleRate: 16000);
+      var steps = 0;
+      while (recognizer.isReady(warmStream) && steps++ < 32) {
+        recognizer.decode(warmStream);
+      }
+    } finally {
+      warmStream.free();
+    }
+    // Uma sessão nova impede que o silêncio de aquecimento afete o cursor.
     stream = recognizer.createStream();
     stream.setOption(key: 'language', value: 'pt-BR');
-    events.send(<String, Object>{'type': 'ready', 'port': commands.sendPort});
+    events.send(<String, Object>{'type': 'ready', 'port': commands.sendPort,
+      'warmupMs': warmup.elapsedMilliseconds});
     var lastPartial = '';
     await for (final dynamic event in commands) {
       if (event is! Map) continue;
@@ -378,6 +399,7 @@ Future<void> _streamingIsolateMain(Map<String, Object> config) async {
       final epoch = event['epoch'] as int;
       final count = event['bytes'] as int;
       final processing = Stopwatch()..start();
+      int? decodeMs;
       try {
         final view = (event['pcm'] as TransferableTypedData).materialize();
         final bytes = view.asUint8List();
@@ -390,7 +412,9 @@ Future<void> _streamingIsolateMain(Map<String, Object> config) async {
         var decoded = false;
         var steps = 0;
         while (recognizer.isReady(stream) && steps++ < 200) {
+          final decodeClock = Stopwatch()..start();
           recognizer.decode(stream);
+          decodeMs ??= decodeClock.elapsedMilliseconds;
           decoded = true;
           // Entregue cada hipótese alterada sem esperar drenar o áudio pronto.
           final partial = recognizer.getResult(stream).text.trim();
@@ -419,7 +443,8 @@ Future<void> _streamingIsolateMain(Map<String, Object> config) async {
         events.send({'type': 'error', 'message': '$error'});
       } finally {
         events.send({'type': 'ack', 'bytes': count, 'epoch': epoch,
-          'micros': processing.elapsedMicroseconds});
+          'micros': processing.elapsedMicroseconds,
+          if (decodeMs != null) 'decodeMs': decodeMs});
       }
     }
   } catch (error) {

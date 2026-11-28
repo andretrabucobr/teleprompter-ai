@@ -132,6 +132,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   List<AsrWordTiming>? _currentTimedWords;
   double _currentAudioEndMs = 0;
   int _timedReplayGeneration = 0;
+  final List<TimedScriptWordMatch> _timedReplayQueue = [];
+  bool _timedReplayScheduled = false;
   String _firstRawHypothesis = '';
   String _firstMatchedWord = '';
   final Stopwatch _voiceSessionClock = Stopwatch();
@@ -534,6 +536,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       // lida, mas NÃO altera a posição visual durante a pausa.
       _broadcast();
     }
+    if (timedUpdate?.revised == true) _timedReplayQueue.clear();
     if (replayMatches.length > 1) {
       _replayTimedMatches(replayMatches.skip(1).toList(growable: false), decision);
     }
@@ -543,33 +546,49 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     List<TimedScriptWordMatch> matches,
     VoiceScrollDecision decision,
   ) {
-    final generation = ++_timedReplayGeneration;
+    for (final match in matches) {
+      final lastQueued = _timedReplayQueue.isEmpty
+          ? _highlightIndex
+          : _timedReplayQueue.last.index;
+      if (match.index > lastQueued &&
+          match.index < _matcher.words.length) {
+        _timedReplayQueue.add(match);
+      }
+    }
+    if (_timedReplayScheduled || _timedReplayQueue.isEmpty) return;
+    _timedReplayScheduled = true;
+    final generation = _timedReplayGeneration;
     final epoch = _voiceScrollEpoch;
-    var cursor = 0;
+    var sequence = 0;
     void nextFrame(Duration _) {
       if (!mounted || generation != _timedReplayGeneration ||
-          epoch != _voiceScrollEpoch || !_playing || cursor >= matches.length) {
+          epoch != _voiceScrollEpoch || !_playing) {
+        _timedReplayQueue.clear();
+        _timedReplayScheduled = false;
         return;
       }
-      final match = matches[cursor++];
-      if (match.index <= _highlightIndex) {
-        WidgetsBinding.instance.scheduleFrameCallback(nextFrame);
+      if (_timedReplayQueue.isEmpty) {
+        _timedReplayScheduled = false;
         return;
       }
-      _highlightIndex = match.index;
-      _focusIndex = (match.index + 1).clamp(0, _matcher.words.length - 1).toInt();
-      if (voiceTrace.enabled) {
-        voiceTrace.add('timed_word_replay', {
-          'index': match.index,
-          'word': _matcher.words[match.index].text,
-          'start_ms': (match.startSeconds * 1000).round(),
-          'end_ms': (match.endSeconds * 1000).round(),
-          'audio_end_ms': _currentAudioEndMs,
-          'frame_sequence': cursor,
-        });
+      final match = _timedReplayQueue.removeAt(0);
+      if (match.index > _highlightIndex) {
+        _highlightIndex = match.index;
+        _focusIndex = (match.index + 1).clamp(0, _matcher.words.length - 1).toInt();
+        sequence++;
+        if (voiceTrace.enabled) {
+          voiceTrace.add('timed_word_replay', {
+            'index': match.index,
+            'word': _matcher.words[match.index].text,
+            'start_ms': (match.startSeconds * 1000).round(),
+            'end_ms': (match.endSeconds * 1000).round(),
+            'audio_end_ms': _currentAudioEndMs,
+            'frame_sequence': sequence,
+          });
+        }
+        if (decision == VoiceScrollDecision.advance) _scrollToFocus();
+        _broadcast();
       }
-      if (decision == VoiceScrollDecision.advance) _scrollToFocus();
-      _broadcast();
       WidgetsBinding.instance.scheduleFrameCallback(nextFrame);
     }
     WidgetsBinding.instance.scheduleFrameCallback(nextFrame);
@@ -808,6 +827,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
 
   Future<void> _pause() async {
     _timedReplayGeneration++;
+    _timedReplayQueue.clear();
+    _timedReplayScheduled = false;
     voiceTrace.add('pause', {'metrics': _capture.voiceMetrics});
     // Não solta o microfone enquanto a inicialização do vídeo está em curso.
     if (_recordingBusy && !_recording) return;
@@ -882,6 +903,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
   void _seekTo(int index, {bool reposition = true}) {
     if (_matcher.words.isEmpty || !mounted) return;
     _timedReplayGeneration++;
+    _timedReplayQueue.clear();
+    _timedReplayScheduled = false;
     final next = index.clamp(0, _matcher.words.length - 1).toInt();
     voiceTrace.add('seek', {'from': _focusIndex, 'to': next});
     if (!reposition && next == _focusIndex) {

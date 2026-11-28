@@ -27,6 +27,28 @@ void main() {
     final t = ContextualScriptTracker('céu azul ilumina montanhas distantes hoje vamos gravar', anchor: 7, highlight: 7);
     expect(t.accept('céu azul ilumina montanhas', isFinal: false).highlight, 3);
   });
+  test('regressão real build 26: título omitido e parciais crescentes', () {
+    final t = ContextualScriptTracker('Bem-vindo ao Oitosete FlowText! Este texto pode acompanhar sua fala, ou avançar em velocidade fixa.');
+    final partials = <String, int>{
+      'Este texto': 5,
+      'Este texto pode': 6,
+      'Este texto pode acompanhar': 7,
+      'Este texto pode acompanhar sua fala': 9,
+      'Este texto pode acompanhar sua fala ou a': 10,
+      'Este texto pode acompanhar sua fala ou avançar em': 12,
+      'Este texto pode acompanhar sua fala ou avançar em velocidade': 13,
+      'Este texto pode acompanhar sua fala ou avançar em velocidade fixa': 14,
+    };
+    for (final entry in partials.entries) {
+      expect(t.accept(entry.key, isFinal: false).highlight, entry.value, reason: entry.key);
+    }
+    expect(t.accept(partials.keys.last, isFinal: true).confirmed, 14);
+  });
+  test('prefixo curto repetido não reposiciona sem desambiguação', () {
+    final t = ContextualScriptTracker('Título principal este texto azul este texto verde');
+    expect(t.accept('este texto', isFinal: false).highlight, -1);
+    expect(t.accept('este texto verde', isFinal: false).highlight, 7);
+  });
   test('sem avanço por palavra fora de contexto', () {
     final t = ContextualScriptTracker('a casa fica bonita');
     expect(t.accept('bonita', isFinal: false).highlight, -1);

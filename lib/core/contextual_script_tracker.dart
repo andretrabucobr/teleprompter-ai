@@ -34,8 +34,16 @@ class ContextualScriptTracker {
     if (isFinal && _lastPartial == null && key == _lastFinal) return state;
     var target = _walk(heard, _confirmed, adjacentOnly);
     if (!adjacentOnly && target == _confirmed) {
-      final recovered = _recover(heard, allowRewind, isFinal);
-      if (recovered != null) target = recovered;
+      // A speech hypothesis can begin after a skipped title or sentence.
+      // Anchor its PREFIX, not its moving tail: longer partials must keep
+      // following the same passage even after the first 8 words.
+      final prefixAnchor = _localPrefixAnchor(heard);
+      if (prefixAnchor != null) {
+        target = _walk(heard, prefixAnchor, false);
+      } else {
+        final recovered = _recover(heard, allowRewind, isFinal);
+        if (recovered != null) target = recovered;
+      }
     }
     _display = target;
     _highlight = target == _confirmed ? _confirmedHighlight : target;
@@ -102,6 +110,38 @@ class ContextualScriptTracker {
       if (!found) break;
     }
     return cursor;
+  }
+
+  /// Two exact consecutive words in a unique nearby passage are enough.
+  /// If a longer prefix disambiguates repetitions, prefer that evidence.
+  /// Never skip based on a single isolated word.
+  int? _localPrefixAnchor(List<String> heard) {
+    if (heard.length < 2) return null;
+    var bestCount = 1;
+    int? best;
+    var tied = false;
+    final first = _confirmed + 2;
+    final last = (_confirmed + 8).clamp(0, words.length - 1).toInt();
+    for (var start = first; start <= last; start++) {
+      var offset = 0;
+      var count = 0;
+      var at = start;
+      while (offset < heard.length && at < words.length) {
+        final length = _match(at, heard, offset);
+        if (length == 0) break;
+        offset += length;
+        at++;
+        count++;
+      }
+      if (count > bestCount) {
+        bestCount = count;
+        best = start - 1;
+        tied = false;
+      } else if (count == bestCount && count >= 2) {
+        tied = true;
+      }
+    }
+    return tied ? null : best;
   }
 
   int? _recover(List<String> heard, bool allowRewind, bool isFinal) {

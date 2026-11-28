@@ -1041,8 +1041,8 @@ class _TeleprompterPageState extends State<TeleprompterPage>
     try {
       final json = voiceTrace.exportJson();
       final dir = await Directory.systemTemp.createTemp('flowtext_trace_');
-      final file = await File('${dir.path}/flowtext_build26_log.json').writeAsString(json, flush: true);
-      await SharePlus.instance.share(ShareParams(files: [XFile(file.path)], text: 'Diagnóstico FlowText Build 26'));
+      final file = await File('${dir.path}/flowtext_build27_log.json').writeAsString(json, flush: true);
+      await SharePlus.instance.share(ShareParams(files: [XFile(file.path)], text: 'Diagnóstico FlowText Build 27'));
     } catch (e) {
       if (mounted) _notice('Falha ao exportar diagnóstico: $e');
     }

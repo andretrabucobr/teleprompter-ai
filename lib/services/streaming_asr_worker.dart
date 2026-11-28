@@ -230,6 +230,8 @@ class StreamingAsrWorker implements AsrWorker {
               if (voiceTrace.enabled) voiceTrace.add('asr_result', {
                 'epoch': _epoch, 'frame': event['frame'], 'audio_end_ms': event['audioEndMs'],
                 'text': value, 'final': event['final'] == true,
+                'tokens': event['tokens'],
+                'token_timestamps_seconds': event['timestamps'],
                 'worker_emitted_us': event['emittedUs'], 'pending_ms': _queuedBytes / 32,
               });
               final isFinal = event['final'] == true;

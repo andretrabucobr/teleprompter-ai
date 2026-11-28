@@ -58,7 +58,7 @@ class VoiceTrace {
     if (recordAudio) {
       final dir = await getTemporaryDirectory();
       final folder = await Directory('${dir.path}/flowtext_build32').create(recursive: true);
-      _audioPath = '${folder.path}/flowtext_build32_audio.wav';
+      _audioPath = '${folder.path}/flowtext_build33_audio.wav';
       try {
         if (await File(_audioPath!).exists()) await File(_audioPath!).delete();
         _audioWriter = await WavPcmWriter.open(_audioPath!, sampleRate: _sampleRate);
@@ -71,7 +71,7 @@ class VoiceTrace {
 
     enabled = true;
     add('trace_start', {
-      'build': '0.10.0+32',
+      'build': '0.10.0+33',
       'os': Platform.operatingSystem,
       'os_version': Platform.operatingSystemVersion,
       'logical_processors': Platform.numberOfProcessors,
@@ -113,6 +113,7 @@ class VoiceTrace {
       'reason': reason,
       'audio_sample_end': _audioSamples,
     });
+    _captureSession = 0;
   }
 
   /// Saves the exact PCM16 bytes forwarded to the active ASR worker.
@@ -178,7 +179,7 @@ class VoiceTrace {
             'sample_count': _audioSamples,
             'duration_ms': _audioSamples * 1000 / _sampleRate,
             'truncated': _audioTruncated,
-            'file': 'flowtext_build32_audio.wav',
+            'file': 'flowtext_build33_audio.wav',
           });
         }
       } catch (e) {
@@ -198,12 +199,12 @@ class VoiceTrace {
 
   String exportJson() => const JsonEncoder.withIndent('  ').convert({
     'schema': 1,
-    'build': '0.10.0+32',
+    'build': '0.10.0+33',
     'started_utc': _startedAt,
     'timeline_origin_us': _originUs,
     'dropped_events': _dropped,
     'audio': _audioPath == null ? null : {
-      'file': 'flowtext_build32_audio.wav',
+      'file': 'flowtext_build33_audio.wav',
       'format': 'PCM16 mono 16000 Hz',
       'sample_count': _audioSamples,
       'duration_ms': _audioSamples * 1000 / _sampleRate,

@@ -7,6 +7,7 @@ class WarmVoiceCache<T extends AsrWorker> {
   WarmVoiceCache(this._create);
   final Future<T?> Function() _create;
   T? _idle;
+  bool get isReady => _idle != null;
   Future<void> _tail = Future<void>.value();
 
   Future<R> _serial<R>(Future<R> Function() action) {

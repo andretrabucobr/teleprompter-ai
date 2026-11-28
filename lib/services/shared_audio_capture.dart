@@ -52,6 +52,7 @@ class SharedAudioCapture {
   Object? _streamError;
 
   bool get running => _active;
+  bool get voicePrepared => _warmVoice.isReady;
   bool get streamingVoice => followingVoice && _recognizer is StreamingAsrWorker;
   bool get streamingHasRecentSpeechEvidence {
     final recognizer = _recognizer;
@@ -122,6 +123,7 @@ class SharedAudioCapture {
         }
         _recognizer!.resume();
         _transcribing = true;
+        voiceTrace.add('asr_following_resumed');
       }
       return;
     }
@@ -172,6 +174,9 @@ class SharedAudioCapture {
             onStatus('Streaming indisponível ($error). Tentando Whisper offline...');
           }
         }
+        if (_recognizer == null && voiceTrace.enabled && voiceTrace.recordAudio) {
+          throw StateError('Diagnóstico com áudio exige Nemotron streaming. O motor não ficou disponível; o teste foi interrompido para evitar misturar outro reconhecedor.');
+        }
         if (_recognizer == null) {
           final whisper = WhisperAsrWorker(
             onText: (text) => onTranscript(text, true),
@@ -204,6 +209,7 @@ class SharedAudioCapture {
       _active = true;
       _transcribing = followVoice;
       voiceTrace.add('mic_ready', {'engine': recognizerName, 'sample_rate': sampleRate});
+      voiceTrace.beginMicCapture(engine: recognizerName, sampleRate: sampleRate);
       _subscription = stream.listen((Uint8List chunk) {
         // A falha do ASR não deve invalidar a trilha de áudio do vídeo.
         try {
@@ -213,6 +219,7 @@ class SharedAudioCapture {
           onStatus('Falha ao salvar áudio: $e');
         }
         if (_transcribing) {
+          if (voiceTrace.enabled && voiceTrace.recordAudio) voiceTrace.addPcm(chunk);
           try {
             _recognizer?.addPcm(chunk);
           } catch (e) {
@@ -232,6 +239,7 @@ class SharedAudioCapture {
   }
 
   Future<void> _cleanupFailedStart() async {
+    voiceTrace.endMicCapture(reason: 'start_failed');
     try { await _recorder?.stop(); } catch (_) { /* ainda não iniciado */ }
     try { await _subscription?.cancel(); } catch (_) { /* já encerrado */ }
     try { await _writer?.close(); } catch (_) { /* WAV incompleto */ }
@@ -254,6 +262,7 @@ class SharedAudioCapture {
   /// Suspende a leitura inteligente, mas mantém o microfone e o WAV gravando.
   void pauseFollowing() {
     if (_transcribing) {
+      voiceTrace.add('asr_following_paused');
       _recognizer?.suspend();
       _transcribing = false;
     }
@@ -283,6 +292,7 @@ class SharedAudioCapture {
     try {
       await _recorder?.stop();
       await _subscription?.cancel();
+      voiceTrace.endMicCapture(reason: 'capture_stopped');
       final path = await writer?.close();
       if (_streamError != null) {
         throw StateError('Falha no PCM durante gravação: $_streamError');

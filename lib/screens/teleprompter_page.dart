@@ -587,6 +587,11 @@ class _TeleprompterPageState extends State<TeleprompterPage>
       _scrollMode == ScrollMode.voice;
 
   Future<void> _startAutomaticExternalVoice(int generation) async {
+    if (voiceTrace.enabled && voiceTrace.recordAudio) {
+      voiceTrace.add('diagnostic_engine_forced', {'engine': 'Nemotron streaming', 'native_asr_bypassed': true});
+      await _capture.start(followVoice: true, saveAudio: false);
+      return;
+    }
     if (await _nativeLocalVoiceAvailable() && _sameVoiceSession(generation)) {
       bool ready = false;
       try {
@@ -1029,34 +1034,83 @@ class _TeleprompterPageState extends State<TeleprompterPage>
 
   Future<void> _toggleVoiceTrace() async {
     if (voiceTrace.enabled) {
+      if (_playPending) {
+        _notice('Aguarde a inicialização da leitura terminar antes de finalizar o diagnóstico.');
+        return;
+      }
+      if (_playing) await _pause();
+      if (_capture.running && !_recording) {
+        await _capture.discard(keepPrepared: _foreground && _scrollMode == ScrollMode.voice);
+      }
       voiceTrace.add('finish', {'metrics': _capture.voiceMetrics});
-      voiceTrace.stop();
+      await voiceTrace.stop();
       if (mounted) setState(() {});
-      _notice('Diagnóstico finalizado. Exporte o arquivo JSON.');
+      _notice(voiceTrace.audioPath == null
+          ? 'Diagnóstico finalizado. Exporte o JSON.'
+          : 'Diagnóstico finalizado. Exporte o JSON e o áudio WAV.');
       return;
     }
-    final accepted = await showDialog<bool>(context: context, builder: (context) =>
+    if (_playing || _playPending || _recording || _recordingBusy) {
+      _notice('Pause a leitura e finalize a gravação da câmera antes de iniciar o diagnóstico.');
+      return;
+    }
+    if (_scrollMode != ScrollMode.voice) {
+      await _changeScrollMode(ScrollMode.voice);
+      if (!mounted) return;
+    }
+    final accepted = await showDialog<String>(context: context, builder: (context) =>
       AlertDialog(title: const Text('Diagnóstico de voz'),
-        content: const Text('Registra localmente o roteiro, hipóteses de voz e tempos de processamento. Não grava áudio bruto nem vídeo. Iniciar substitui o log anterior.'),
+        content: const Text('Escolha o tipo de diagnóstico. “Log + áudio original” grava até 4 minutos do PCM16 mono 16 kHz exatamente enviado ao Nemotron. O áudio e o JSON ficam no aparelho e só são compartilhados quando você exportar. Esse modo usa Nemotron streaming, não o reconhecedor nativo do Android. Não grave outras pessoas sem consentimento.'),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Iniciar diagnóstico')),
+          TextButton(onPressed: () => Navigator.pop(context, null), child: const Text('Cancelar')),
+          TextButton(onPressed: () => Navigator.pop(context, 'log'), child: const Text('Somente log')),
+          FilledButton(onPressed: () => Navigator.pop(context, 'audio'), child: const Text('Log + áudio original')),
         ]));
-    if (accepted != true || !mounted) return;
-    voiceTrace.start();
-    voiceTrace.add('session_context', {'script': _script.text, 'anchor': _activeIndex,
-      'focus': _focusIndex, 'highlight': _highlightIndex, 'metrics': _capture.voiceMetrics});
-    setState(() {});
-    _notice('Diagnóstico iniciado. Faça suas rodadas de leitura.');
+    if (accepted == null || !mounted) return;
+    try {
+      await voiceTrace.start(recordAudio: accepted == 'audio');
+    } catch (e) {
+      if (mounted) _notice('Não foi possível iniciar o diagnóstico: $e');
+      return;
+    }
+    voiceTrace.add('session_context', {
+      'script': _script.text,
+      'anchor': _activeIndex,
+      'focus': _focusIndex,
+      'highlight': _highlightIndex,
+      'metrics': _capture.voiceMetrics,
+      'voice_model_preloaded': _capture.voicePrepared,
+      'mode': _mode.name,
+      'audio_capture': accepted == 'audio',
+      'audio_source': accepted == 'audio' ? 'exact PCM chunks passed to Nemotron' : null,
+    });
+    if (mounted) setState(() {});
+    _notice(accepted == 'audio'
+        ? 'Diagnóstico com áudio iniciado. Pressione Iniciar para começar a leitura.'
+        : 'Diagnóstico iniciado. Pressione Iniciar para começar a leitura.');
   }
 
   Future<void> _exportVoiceTrace() async {
     if (!voiceTrace.hasData) return;
+    if (voiceTrace.enabled) {
+      _notice('Finalize o diagnóstico antes de exportar.');
+      return;
+    }
     try {
       final json = voiceTrace.exportJson();
       final dir = await Directory.systemTemp.createTemp('flowtext_trace_');
-      final file = await File('${dir.path}/flowtext_build30_log.json').writeAsString(json, flush: true);
-      await SharePlus.instance.share(ShareParams(files: [XFile(file.path)], text: 'Diagnóstico FlowText Build 30'));
+      final file = await File('${dir.path}/flowtext_build32_log.json').writeAsString(json, flush: true);
+      final files = <XFile>[XFile(file.path)];
+      final audioPath = voiceTrace.audioPath;
+      if (audioPath != null && await File(audioPath).exists() && await File(audioPath).length() > 44) {
+        files.add(XFile(audioPath));
+      }
+      await SharePlus.instance.share(ShareParams(
+        files: files,
+        text: files.length == 1
+            ? 'Diagnóstico FlowText Build 32 (JSON)'
+            : 'Diagnóstico FlowText Build 32 (JSON + áudio PCM original)',
+      ));
     } catch (e) {
       if (mounted) _notice('Falha ao exportar diagnóstico: $e');
     }
@@ -1572,7 +1626,7 @@ class _TeleprompterPageState extends State<TeleprompterPage>
                 onSelected: (value) { if (value == 'toggle') { unawaited(_toggleVoiceTrace()); } else { unawaited(_exportVoiceTrace()); } },
                 itemBuilder: (_) => [
                   PopupMenuItem(value: 'toggle', child: Text(voiceTrace.enabled ? 'Finalizar diagnóstico' : 'Iniciar diagnóstico')),
-                  PopupMenuItem(value: 'export', enabled: voiceTrace.hasData, child: const Text('Exportar log JSON')),
+                  PopupMenuItem(value: 'export', enabled: voiceTrace.hasData && !voiceTrace.enabled, child: const Text('Exportar log + áudio (JSON + WAV')),
                 ],
               ),
               if (_remoteConnected)
